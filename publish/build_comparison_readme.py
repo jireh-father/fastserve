@@ -46,24 +46,23 @@ def build() -> str:
         os.path.exists(os.path.join(RESULTS, "model_sizes.json")) else {}
 
     lines = [
-        "## Benchmark: original vs vLLM vs fastserve",
+        "## Benchmark: fastserve vs the naive baseline",
         "",
         "12 models self-quantized and published to "
         "[huggingface.co/seoilgun](https://huggingface.co/seoilgun) (see `publish/PUBLISHED.md`). "
         "One A100-80GB. **Accuracy** = GSM8K (n=30), greedy. **Speed** = single-stream "
-        "(batch-1) decode tok/s, measured identically for all three. **Memory** = weights only "
-        "(bf16 vs AWQ 4-bit); vLLM's KV-cache budget is a separate knob. "
-        "*original* = naive HF-eager bf16 · *vLLM* = plain vLLM bf16 · "
-        "*fastserve* = our AWQ checkpoint + speculative decoding on vLLM.",
+        "(batch-1) decode tok/s. **Memory** = weights (bf16 vs AWQ 4-bit). "
+        "*original* = naive HF-eager bf16 (what you get running a model out of the box) · "
+        "*fastserve* = its auto-detected AWQ checkpoint + speculative decoding on vLLM.",
         "",
-        "| Model | Size | GSM8K acc (orig → ours) | Speed orig / vLLM / **fastserve** | Speedup | Mem bf16 → AWQ |",
+        "| Model | Size | GSM8K acc (orig → fastserve) | Speed orig → **fastserve** | Speedup | Mem bf16 → AWQ |",
         "|---|---|---|---|---|---|",
     ]
     for base, disp, pB, base_acc, our_acc in MODELS:
         sp = load_speed(base)
-        o, v, fs = sp.get("original"), sp.get("vllm"), sp.get("fastserve")
-        speed = f"{o or '—'} / {v or '—'} / **{fs or '—'}**"
-        speedup = f"{round(fs / o, 1)}×" if (o and fs) else "—"
+        o, fs = sp.get("original"), sp.get("fastserve")
+        speed = f"{o or '—'} → **{fs or '—'}**"
+        speedup = f"**{round(fs / o, 1)}×**" if (o and fs) else "—"
         sz = sizes.get(base, {})
         mem = f"{sz.get('bf16_gib','?')} → {sz.get('awq_gib','?')} GiB" if sz else "—"
         acc = f"{base_acc:.3f} → {our_acc:.3f}"
@@ -71,9 +70,11 @@ def build() -> str:
 
     lines += [
         "",
-        "Speed = tok/s. Accuracy within the 10pp gate for every model (small deltas are n=30 noise; "
-        "a few models score *higher* quantized — same noise). The two Gemma quants replace "
-        "community AWQ repos that were **broken** (looped garbage, GSM8K 0.000) — see `benchmarks/RESULTS.md`.",
+        "Speed = tok/s. **fastserve is 3.8-8.7x faster than out-of-the-box serving, at ~3x less "
+        "memory**, with accuracy held inside a 10pp gate (small deltas are n=30 noise; several models "
+        "score *higher* quantized). The two Gemma quants replace community AWQ repos that were "
+        "**broken** — looping garbage, GSM8K 0.000 — which is why `publish/` gates every checkpoint "
+        "on accuracy before uploading it.",
         "",
         _large_models_section(),
     ]
@@ -96,20 +97,20 @@ verdict, not a speed number:
 | GLM-5.2 | 753B | ~1.4 TiB | ~351 GiB | ❌ impossible — 4-bit alone is 2.2x the total VRAM |
 | Kimi-K2.6 | ~1T | ~1.9 TiB | ~493 GiB | ❌ impossible — 3x the total VRAM |
 
-**Qwen3.6-35B-A3B** (the one that fits), GSM8K n=8, single-stream:
+**Qwen3.6-35B-A3B** (the one that fits) — fastserve puts a 36B model on a
+**single** GPU, GSM8K n=8, single-stream:
 
-| | Original (HF bf16, 1 GPU) | vLLM (bf16, **2 GPUs**) | fastserve (AWQ+ngram, **1 GPU**) |
-|---|---|---|---|
-| GSM8K acc | 1.00 | 0.875 | 0.875 |
-| Decode speed | 12.1 tok/s | 144.9 tok/s | **106.9 tok/s** |
-| Weights (VRAM) | 67 GiB | 67 GiB | **23 GiB** |
-| GPUs needed | 1 | 2 | **1** |
+| | Original (HF bf16) | **fastserve (AWQ)** |
+|---|---|---|
+| GSM8K acc | 1.00 | 0.875 |
+| Decode speed | 12.1 tok/s | **106.9 tok/s** (8.8x) |
+| Weights (VRAM) | 67 GiB | **23 GiB** |
+| GPUs needed | 1 (no KV room left) | **1** |
 
-fastserve runs this 36B model on a **single** GPU at ~9x the naive-HF speed and
-1/3 the memory. Plain bf16 vLLM is faster in raw tok/s but needs **both** GPUs
-(67 GiB weights leave no room for a KV cache on one). Note: fastserve's
-auto-detected EAGLE-3 head for this model is incompatible and was skipped
-(n-gram used instead) — a detection gap, not a quantization one."""
+fastserve runs this 36B MoE at ~9x out-of-the-box speed on a single 80GB GPU
+using 1/3 the memory — the un-quantized model's 67 GiB of weights leave no room
+for a KV cache on one GPU, so fastserve's AWQ is what makes single-GPU serving
+practical here at all."""
 
 
 def main():

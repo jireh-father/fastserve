@@ -57,6 +57,11 @@ def run_vllm(model: str, n: int, speed_prompts: int, spec: str | None) -> dict:
     tp = int(os.environ.get("FASTSERVE_TP", "1"))
     kwargs = dict(model=model, max_model_len=4096, gpu_memory_utilization=mem_util,
                   tensor_parallel_size=tp, trust_remote_code=True)
+    kv_dtype = os.environ.get("FASTSERVE_KV_CACHE_DTYPE")
+    if kv_dtype:
+        kwargs["kv_cache_dtype"] = kv_dtype
+    if os.environ.get("FASTSERVE_ENFORCE_EAGER") == "1":
+        kwargs["enforce_eager"] = True
     if spec == "ngram":
         kwargs["speculative_config"] = {"method": "ngram", "num_speculative_tokens": 3,
                                         "prompt_lookup_max": 4, "prompt_lookup_min": 2}

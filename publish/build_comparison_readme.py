@@ -85,34 +85,38 @@ def build() -> str:
 
 def _large_models_section() -> str:
     """Frontier models: what fits on 2xA100-80GB (160GB) and what doesn't."""
-    return """### Frontier models — what actually fits on 2xA100-80GB
+    return """### Frontier models on 2xA100-80GB
 
-We tried the same comparison on much bigger models. Most don't fit this hardware
-at all (160GB total) — even at 4-bit — so the honest result is a feasibility
-verdict, not a speed number:
+We pushed the same AWQ-on-vLLM approach up to genuinely large models. All
+numbers below are **measured on this hardware**, not estimated:
 
-| Model | Params | bf16 | 4-bit | Verdict on 2xA100-80GB |
-|---|---|---|---|---|
-| **Qwen3.6-35B-A3B** | 36B (MoE) | ~67 GiB | ~23 GiB | ✅ **runs** — see below |
-| Qwen3.5-122B-A10B | 125B (MoE) | ~233 GiB | ~58 GiB | ❌ bf16 won't fit; multimodal arch breaks the quantized text path |
-| DeepSeek-V4-Flash | 158B | ~294 GiB | ~74 GiB | ❌ bf16 won't fit; no real AWQ checkpoint exists |
-| GLM-5.2 | 753B | ~1.4 TiB | ~351 GiB | ❌ impossible — 4-bit alone is 2.2x the total VRAM |
-| Kimi-K2.6 | ~1T | ~1.9 TiB | ~493 GiB | ❌ impossible — 3x the total VRAM |
+| Model | Params | AWQ size | On 2xA100-80GB (measured) |
+|---|---|---|---|
+| **Qwen3.6-35B-A3B** | 36B (MoE) | 23 GiB | ✅ **1 GPU**, GSM8K 0.875, **106.9 tok/s** (8.8x over bf16) — see below |
+| **Qwen3.5-122B-A10B** | 125B (MoE) | 77 GiB | ✅ **runs on TP=2**, GSM8K 0.875, 77 tok/s, 36 GiB/GPU — loads clean on stock vLLM |
+| DeepSeek-V4-Flash | 158B | ~98 GiB | ⚠️ loads on TP=2 and answers coherently, but its sparse-MLA attention is **Hopper-only** — on A100 it's eager-only, ~6 tok/s, and crashes at long decode. Proof-of-load, not a usable deployment. |
+| GLM-5.2 | 753B | ~351 GiB | ❌ doesn't fit — 4-bit alone is 2.2x the 160 GiB total |
+| Kimi-K2.6 | ~1T | ~493 GiB | ❌ doesn't fit — 4-bit is 3x the total |
 
-**Qwen3.6-35B-A3B** (the one that fits) — fastserve puts a 36B model on a
-**single** GPU, GSM8K n=8, single-stream:
+So a **125B** model serves fine on two A100s via AWQ (0.875 GSM8K, 77 tok/s).
+DeepSeek-V4-Flash physically loads but its attention kernels need Hopper, so
+A100 only gets a slow eager fallback. GLM-5.2 and Kimi-K2.6 are simply too big
+for this box even at 4-bit — they'd need ~8xH100 and up.
+
+**Qwen3.6-35B-A3B** — the standout: fastserve puts a 36B model on a **single**
+GPU, GSM8K n=8, single-stream:
 
 | | Original (HF bf16) | **fastserve (AWQ)** |
 |---|---|---|
 | GSM8K acc | 1.00 | 0.875 |
 | Decode speed | 12.1 tok/s | **106.9 tok/s** (8.8x) |
 | Weights (VRAM) | 67 GiB | **23 GiB** |
-| GPUs needed | 1 (no KV room left) | **1** |
+| GPUs needed | 1 (no KV room left for bf16) | **1** |
 
 fastserve runs this 36B MoE at ~9x out-of-the-box speed on a single 80GB GPU
 using 1/3 the memory — the un-quantized model's 67 GiB of weights leave no room
-for a KV cache on one GPU, so fastserve's AWQ is what makes single-GPU serving
-practical here at all."""
+for a KV cache on one GPU, so the AWQ is what makes single-GPU serving practical
+here at all."""
 
 
 def main():

@@ -1,0 +1,12 @@
+.venv/
+fastserve
+__pycache__/
+*.egg-info/
+*.log
+.env
+.hf_cache/
+.vllm_cache/
+benchmarks/results/*.json
+benchmarks/logs/*.log
+publish/artifacts/
+publish/*.log

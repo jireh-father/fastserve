@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fastserve"
+version = "0.1.0"
+description = "Zero-config LLM speedup: auto-detects the fastest vLLM stack (quantization + speculative decoding) for any Hugging Face model."
+readme = "README.md"
+requires-python = ">=3.9"
+license = {text = "MIT"}
+dependencies = [
+    "huggingface_hub>=0.25",
+]
+
+[project.optional-dependencies]
+serve = ["vllm>=0.24.0"]
+bench = ["vllm>=0.24.0", "torch", "transformers", "datasets"]
+# Self-quantization pipeline (publish/): quantize a model, gate it against its
+# own bf16 accuracy, upload to your own HF namespace. See publish/README.md.
+publish = ["vllm>=0.24.0", "torch", "transformers", "datasets", "accelerate",
+           "llmcompressor>=0.12", "python-dotenv"]
+
+[project.scripts]
+fastserve = "fastserve.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

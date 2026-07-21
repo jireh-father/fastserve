@@ -39,7 +39,7 @@ def main():
         print(f"\n[{i+1}/{len(BASES)}] {base} (+{round(time.time()-t0)}s)", flush=True)
         with open(log, "w") as f:
             subprocess.run([VENV_PY, os.path.join(HERE, "compare3.py"),
-                            "--base", base, "--n", "30", "--out", out],
+                            "--base", base, "--n", "8", "--out", out],
                            env=dict(os.environ, CUDA_VISIBLE_DEVICES=os.environ.get("FASTSERVE_GPU", "0"),
                                     HF_HOME=HF_HOME,
                                     VLLM_CACHE_ROOT=os.path.join(ROOT, "..", ".vllm_cache")),

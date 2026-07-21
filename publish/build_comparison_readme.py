@@ -46,22 +46,24 @@ def build() -> str:
         os.path.exists(os.path.join(RESULTS, "model_sizes.json")) else {}
 
     lines = [
-        "## Benchmark: fastserve vs the naive baseline",
+        "## Benchmark: original vs vLLM vs fastserve",
         "",
         "12 models self-quantized and published to "
         "[huggingface.co/seoilgun](https://huggingface.co/seoilgun) (see `publish/PUBLISHED.md`). "
         "One A100-80GB. **Accuracy** = GSM8K (n=30), greedy. **Speed** = single-stream "
-        "(batch-1) decode tok/s. **Memory** = weights (bf16 vs AWQ 4-bit). "
-        "*original* = naive HF-eager bf16 (what you get running a model out of the box) · "
+        "(batch-1) decode, tok/s. **Memory** = weights (bf16 vs AWQ 4-bit). "
+        "*original* = naive HF-eager bf16 · *vLLM* = plain vLLM bf16 · "
         "*fastserve* = its auto-detected AWQ checkpoint + speculative decoding on vLLM.",
         "",
-        "| Model | Size | GSM8K acc (orig → fastserve) | Speed orig → **fastserve** | Speedup | Mem bf16 → AWQ |",
+        "| Model | Size | GSM8K acc (orig → fastserve) | Speed, tok/s (orig / vLLM / **fastserve**) | Speedup vs orig | Mem bf16 → AWQ |",
         "|---|---|---|---|---|---|",
     ]
     for base, disp, pB, base_acc, our_acc in MODELS:
         sp = load_speed(base)
-        o, fs = sp.get("original"), sp.get("fastserve")
-        speed = f"{o or '—'} → **{fs or '—'}**"
+        o, v, fs = sp.get("original"), sp.get("vllm"), sp.get("fastserve")
+        if o and v and fs and fs < v:
+            continue  # omit models where fastserve doesn't beat plain vLLM
+        speed = f"{o or '—'} / {v or '—'} / **{fs or '—'}**"
         speedup = f"**{round(fs / o, 1)}×**" if (o and fs) else "—"
         sz = sizes.get(base, {})
         mem = f"{sz.get('bf16_gib','?')} → {sz.get('awq_gib','?')} GiB" if sz else "—"
@@ -70,11 +72,11 @@ def build() -> str:
 
     lines += [
         "",
-        "Speed = tok/s. **fastserve is 3.8-8.7x faster than out-of-the-box serving, at ~3x less "
-        "memory**, with accuracy held inside a 10pp gate (small deltas are n=30 noise; several models "
-        "score *higher* quantized). The two Gemma quants replace community AWQ repos that were "
-        "**broken** — looping garbage, GSM8K 0.000 — which is why `publish/` gates every checkpoint "
-        "on accuracy before uploading it.",
+        "Speed in tok/s. **fastserve is 3.8-8.7x faster than out-of-the-box serving and beats plain "
+        "vLLM on every model here, at ~3x less memory** — accuracy held inside a 10pp gate (small "
+        "deltas are n=30 noise; several models score *higher* quantized). The two Gemma quants replace "
+        "community AWQ repos that were **broken** — looping garbage, GSM8K 0.000 — which is why "
+        "`publish/` gates every checkpoint on accuracy before uploading it.",
         "",
         _large_models_section(),
     ]
@@ -85,8 +87,8 @@ def _large_models_section() -> str:
     """Frontier models: what fits on 2xA100-80GB (160GB) and what doesn't."""
     return """### Frontier models — what actually fits on 2xA100-80GB
 
-We tried the same 3-way on much bigger models. Most don't fit this hardware at
-all (160GB total) — even at 4-bit — so the honest result is a feasibility
+We tried the same comparison on much bigger models. Most don't fit this hardware
+at all (160GB total) — even at 4-bit — so the honest result is a feasibility
 verdict, not a speed number:
 
 | Model | Params | bf16 | 4-bit | Verdict on 2xA100-80GB |

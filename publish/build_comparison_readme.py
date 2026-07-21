@@ -98,25 +98,29 @@ numbers below are **measured on this hardware**, not estimated:
 | GLM-5.2 | 753B | ~351 GiB | ❌ doesn't fit — 4-bit alone is 2.2x the 160 GiB total |
 | Kimi-K2.6 | ~1T | ~493 GiB | ❌ doesn't fit — 4-bit is 3x the total |
 
-So a **125B** model serves fine on two A100s via AWQ (0.875 GSM8K, 77 tok/s).
-DeepSeek-V4-Flash physically loads but its attention kernels need Hopper, so
-A100 only gets a slow eager fallback. GLM-5.2 and Kimi-K2.6 are simply too big
-for this box even at 4-bit — they'd need ~8xH100 and up.
+Two things worth calling out. **Qwen3.5-122B-A10B only runs *because* of the
+quantization** — its bf16 weights are ~233 GiB, which doesn't fit 160 GiB of
+VRAM, so there is no un-optimized baseline to compare against: AWQ is the
+difference between "can't load" and "77 tok/s." DeepSeek-V4-Flash physically
+loads but its attention kernels need Hopper, so A100 only gets a slow eager
+fallback. GLM-5.2 and Kimi-K2.6 are simply too big for this box even at 4-bit —
+they'd need ~8xH100 and up.
 
-**Qwen3.6-35B-A3B** — the standout: fastserve puts a 36B model on a **single**
-GPU, GSM8K n=8, single-stream:
+**Qwen3.6-35B-A3B** is the one large model where all three configs run, so it
+shows the full picture (GSM8K n=8, single-stream):
 
-| | Original (HF bf16) | **fastserve (AWQ)** |
-|---|---|---|
-| GSM8K acc | 1.00 | 0.875 |
-| Decode speed | 12.1 tok/s | **106.9 tok/s** (8.8x) |
-| Weights (VRAM) | 67 GiB | **23 GiB** |
-| GPUs needed | 1 (no KV room left for bf16) | **1** |
+| | Original (HF bf16, 1 GPU) | vLLM (bf16, **2 GPUs**) | **fastserve (AWQ, 1 GPU)** |
+|---|---|---|---|
+| GSM8K acc | 1.00 | 0.875 | 0.875 |
+| Decode speed | 12.1 tok/s | 144.9 tok/s | **106.9 tok/s** |
+| Weights (VRAM) | 67 GiB | 67 GiB | **23 GiB** |
+| GPUs needed | 1 | 2 | **1** |
 
-fastserve runs this 36B MoE at ~9x out-of-the-box speed on a single 80GB GPU
-using 1/3 the memory — the un-quantized model's 67 GiB of weights leave no room
-for a KV cache on one GPU, so the AWQ is what makes single-GPU serving practical
-here at all."""
+fastserve runs this 36B MoE at **8.8x out-of-the-box speed on a single 80GB GPU
+using 1/3 the memory**. Plain bf16 vLLM posts a higher raw tok/s — but only by
+using **both** GPUs and 3x the memory (67 GiB of bf16 weights leave no room for
+a KV cache on one card). Per GPU, fastserve does more; on the same single card,
+nothing else comes close."""
 
 
 def main():

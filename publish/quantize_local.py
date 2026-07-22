@@ -41,6 +41,9 @@ def main() -> None:
     ap.add_argument("--n", type=int, default=30, help="baseline GSM8K question count")
     ap.add_argument("--w-bit", type=int, default=4)
     ap.add_argument("--q-group-size", type=int, default=128)
+    ap.add_argument("--method", choices=["awq", "w8a8"], default="awq",
+                     help="awq = W4A16 AWQ (default); w8a8 = INT8 weights+acts via GPTQ "
+                          "(A100 INT8 tensor cores, no 4-bit dequant — faster on A100 for MoE)")
     ap.add_argument("--calib-samples", type=int, default=256)
     ap.add_argument("--calib-seq-len", type=int, default=512)
     # ultrachat-200k is chat-formatted (best for instruct models) but has
@@ -71,12 +74,17 @@ def main() -> None:
     gc.collect()
     torch.cuda.empty_cache()
 
-    print("=== llm-compressor AWQ quantize ===", flush=True)
+    print(f"=== llm-compressor {args.method.upper()} quantize ===", flush=True)
     from llmcompressor import oneshot
-    from llmcompressor.modifiers.awq import AWQModifier
 
-    scheme = f"W{args.w_bit}A16_ASYM"
-    recipe = [AWQModifier(ignore=["lm_head"], scheme=scheme, targets=["Linear"], duo_scaling="both")]
+    if args.method == "w8a8":
+        from llmcompressor.modifiers.quantization import GPTQModifier
+        scheme = "W8A8"
+        recipe = [GPTQModifier(ignore=["lm_head"], scheme=scheme, targets=["Linear"])]
+    else:
+        from llmcompressor.modifiers.awq import AWQModifier
+        scheme = f"W{args.w_bit}A16_ASYM"
+        recipe = [AWQModifier(ignore=["lm_head"], scheme=scheme, targets=["Linear"], duo_scaling="both")]
 
     default_split = {"ultrachat-200k": f"train_sft[:{args.calib_samples}]"}.get(
         args.calib_dataset, f"train[:{args.calib_samples}]")

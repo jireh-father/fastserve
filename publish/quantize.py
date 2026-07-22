@@ -42,18 +42,21 @@ def main() -> None:
                      help="wikitext (+ --calib-config wikitext-2-raw-v1) for chat templates that "
                           "reject system-role messages, e.g. Gemma")
     ap.add_argument("--calib-config", default=None)
+    ap.add_argument("--method", choices=["awq", "w8a8"], default="awq",
+                     help="awq = W4A16 (default); w8a8 = INT8 (A100-friendly)")
     args = ap.parse_args()
 
     load_dotenv(os.path.join(FASTSERVE_ROOT, ".env"))
 
-    out_dir = args.out_dir or os.path.join(HERE, "artifacts", args.model.split("/")[-1] + "-AWQ")
+    suffix = "W8A8-INT8" if args.method == "w8a8" else "AWQ"
+    out_dir = args.out_dir or os.path.join(HERE, "artifacts", args.model.split("/")[-1] + "-" + suffix)
     env = dict(os.environ, CUDA_VISIBLE_DEVICES=args.gpu, HF_HOME=HF_HOME, VLLM_CACHE_ROOT=VLLM_CACHE_ROOT)
 
     print(f"=== stage 1/2: quantize {args.model} -> {out_dir} ===", flush=True)
     stage1 = [
         VENV_PY, os.path.join(HERE, "quantize_local.py"),
         "--model", args.model, "--out-dir", out_dir, "--n", str(args.n),
-        "--calib-dataset", args.calib_dataset,
+        "--calib-dataset", args.calib_dataset, "--method", args.method,
     ]
     if args.calib_config:
         stage1 += ["--calib-config", args.calib_config]

@@ -63,7 +63,9 @@ def main() -> None:
         sys.exit(1)
     print("GATE PASSED.", flush=True)
 
-    repo_name = args.repo_name or (source_model.split("/")[-1] + "-AWQ")
+    scheme = meta.get("quant_config", {}).get("scheme", "")
+    suffix = "W8A8-INT8" if scheme == "W8A8" else "AWQ"
+    repo_name = args.repo_name or (source_model.split("/")[-1] + "-" + suffix)
     repo_id = f"{args.namespace}/{repo_name}"
 
     if args.dry_run:

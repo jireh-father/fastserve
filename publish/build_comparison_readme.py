@@ -106,26 +106,24 @@ loads but its attention kernels need Hopper, so A100 only gets a slow eager
 fallback. GLM-5.2 and Kimi-K2.6 are simply too big for this box even at 4-bit —
 they'd need ~8xH100 and up.
 
-**Qwen3.6-35B-A3B** shows the full picture (GSM8K n=8, single-stream decode):
+**Qwen3.6-35B-A3B**, all on a **single 80GB GPU** (GSM8K n=8, single-stream decode):
 
-| Config | Speed | GPUs | Weights |
-|---|---|---|---|
-| Original (HF-eager bf16) | 12.1 tok/s | 1 | 67 GiB |
-| vLLM bf16, 1 GPU (eager) | 14.1 tok/s | 1 | 67 GiB |
-| vLLM bf16, 2 GPUs (CUDA graphs) | 144.9 tok/s | 2 | 67 GiB |
-| **fastserve AWQ, 1 GPU** | **106.9 tok/s** | **1** | **23 GiB** |
-| **fastserve W8A8-INT8, 1 GPU** | **121.3 tok/s** | **1** | ~35 GiB |
+| Config | Speed | Weights |
+|---|---|---|
+| Original (HF-eager bf16) | 12.1 tok/s | 67 GiB |
+| plain vLLM bf16 | 14.1 tok/s | 67 GiB |
+| **fastserve AWQ** | **106.9 tok/s** | **23 GiB** |
+| **fastserve W8A8-INT8** | **121.3 tok/s** | ~35 GiB |
 
 The interesting part: bf16 **does** fit on a single 80GB card (weights are
 65.5 GiB) — but it fills the GPU too full to capture **CUDA graphs**, and CUDA
 graphs are where most of vLLM's speed comes from. So single-GPU bf16 is stuck
-in eager mode at ~14 tok/s, barely above raw HF. Getting the 144.9 figure means
-spreading the weights over **2 GPUs** so there's room for graphs.
+in eager mode at ~14 tok/s, barely above raw HF.
 
-Quantization is what breaks that trade-off: shrinking the weights (AWQ 23 GiB,
-W8A8 ~35 GiB) leaves plenty of room to run CUDA graphs on **one** card — which
-is why fastserve hits 107-121 tok/s single-GPU where bf16 can only do 14. So on
-a single GPU, fastserve is **~8x faster than plain vLLM** (121 vs 14): the
+Quantization is what breaks that: shrinking the weights (AWQ 23 GiB, W8A8
+~35 GiB) leaves plenty of room to run CUDA graphs on one card — which is why
+fastserve hits 107-121 tok/s where bf16 can only do 14. So on a single GPU,
+fastserve is **~8x faster than plain vLLM** (121 vs 14): the
 quantization is what lets one card use the CUDA-graph fast path at all.
 
 ### These are A100 numbers — H100/H200 shifts them

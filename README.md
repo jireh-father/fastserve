@@ -72,9 +72,21 @@ spreading the weights over **2 GPUs** so there's room for graphs.
 
 Quantization is what breaks that trade-off: shrinking the weights (AWQ 23 GiB,
 W8A8 ~35 GiB) leaves plenty of room to run CUDA graphs on **one** card — which
-is why fastserve hits 107-121 tok/s single-GPU where bf16 can only do 14. On
-A100 specifically, **W8A8-INT8 beats AWQ by ~13%** (121 vs 107) because it uses
-the native INT8 tensor cores instead of dequantizing 4-bit weights to fp16.
+is why fastserve hits 107-121 tok/s single-GPU where bf16 can only do 14. So on
+a single GPU, fastserve is **~8x faster than plain vLLM** (121 vs 14): the
+quantization is what lets one card use the CUDA-graph fast path at all.
+
+### These are A100 numbers — H100/H200 shifts them
+
+- **W8A8-INT8 beats AWQ here (121 vs 107)** because A100 has INT8 tensor cores
+  but *no* FP8. On **H100/H200** you'd use **FP8** instead (native fast path),
+  and the format ranking changes.
+- The "bf16 can't fit CUDA graphs on one card" problem is an **80 GiB** limit;
+  on **H200 (141 GiB)** bf16 + graphs fit on one GPU comfortably, so that gap
+  mostly closes. H100 (80 GiB) is as tight as A100.
+- Models with **Hopper-only kernels** (DeepSeek-V4-Flash's sparse-MLA) run
+  fully on H100 but only get a slow eager fallback on A100.
+- H100 is ~2-3x faster raw, so every absolute number goes up.
 <!-- COMPARISON:END -->
 
 ## Install

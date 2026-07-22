@@ -113,7 +113,7 @@ they'd need ~8xH100 and up.
 | Original (HF-eager bf16) | 12.1 tok/s | 67 GiB |
 | plain vLLM bf16 | 14.1 tok/s | 67 GiB |
 | **fastserve AWQ** | **106.9 tok/s** | **23 GiB** |
-| **fastserve W8A8-INT8** | **121.3 tok/s** | ~35 GiB |
+| W8A8-INT8 (community quant) | 121.3 tok/s | ~35 GiB |
 
 The interesting part: bf16 **does** fit on a single 80GB card (weights are
 65.5 GiB) — but it fills the GPU too full to capture **CUDA graphs**, and CUDA
@@ -122,9 +122,11 @@ in eager mode at ~14 tok/s, barely above raw HF.
 
 Quantization is what breaks that: shrinking the weights (AWQ 23 GiB, W8A8
 ~35 GiB) leaves plenty of room to run CUDA graphs on one card — which is why
-fastserve hits 107-121 tok/s where bf16 can only do 14. So on a single GPU,
-fastserve is **~8x faster than plain vLLM** (121 vs 14): the
-quantization is what lets one card use the CUDA-graph fast path at all.
+fastserve hits ~107 tok/s (AWQ) where bf16 can only do 14 — **~8x faster than
+plain vLLM on the same single GPU**. A community W8A8-INT8 checkpoint goes a bit
+further still (121 tok/s), since A100's INT8 tensor cores skip the 4-bit
+dequant. (fastserve auto-serves the AWQ; the W8A8 number is a measured
+community quant — see the note below on why `publish/` can't re-make it here.)
 
 ### These are A100 numbers — H100/H200 shifts them
 

@@ -59,10 +59,21 @@ def main() -> None:
     args = ap.parse_args()
 
     import torch
-    from transformers import AutoModelForCausalLM, AutoTokenizer
+    from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 
     long_thinker = is_long_thinker(args.model)
     tok = AutoTokenizer.from_pretrained(args.model, trust_remote_code=True)
+
+    # Multimodal models (Qwen3.5/3.6 = *ForConditionalGeneration with a vision
+    # tower) must be quantized *as* the multimodal model — quantizing only the
+    # text tower via AutoModelForCausalLM saves a text-only config that vLLM's
+    # multimodal loader then rejects (`Expected Qwen3_5MoeConfig, found
+    # Qwen3_5MoeTextConfig`). Loading the full ConditionalGeneration model and
+    # ignoring the vision layers preserves the multimodal config + vision
+    # weights so the result loads.
+    _cfg = AutoConfig.from_pretrained(args.model, trust_remote_code=True)
+    is_multimodal = hasattr(_cfg, "vision_config")
+    print(f"multimodal: {is_multimodal}", flush=True)
 
     print(f"=== baseline bf16 GSM8K(n={args.n}) ===", flush=True)
     model = AutoModelForCausalLM.from_pretrained(
@@ -77,14 +88,30 @@ def main() -> None:
     print(f"=== llm-compressor {args.method.upper()} quantize ===", flush=True)
     from llmcompressor import oneshot
 
+    # Never quantize the vision tower — only the language layers. (Ignoring it
+    # also keeps its weights in the saved checkpoint at full precision.)
+    ignore = ["lm_head"]
+    if is_multimodal:
+        ignore += ["re:.*visual.*", "re:.*vision.*", "re:.*merger.*"]
+    # Recurrent / linear-attention blocks (Gated DeltaNet, Mamba, short-conv) are
+    # extremely sensitive to weight quantization — their state accumulates error
+    # over the sequence, so a quantized model starts coherent then degenerates
+    # (observed on Qwen3.6-35B's `linear_attn`). Keep them full precision; they're
+    # a small fraction of the weights. Patterns are no-ops on models without them.
+    ignore += ["re:.*linear_attn.*", "re:.*mamba.*", "re:.*conv1d.*", "re:.*\\.gate$"]
+
     if args.method == "w8a8":
-        from llmcompressor.modifiers.quantization import GPTQModifier
+        # RTN (min-max weights + dynamic per-token INT8 activations), NOT GPTQ —
+        # GPTQ solves a Hessian per weight matrix, which on a 256-expert MoE means
+        # tens of thousands of per-expert solves (~hours). INT8 is forgiving enough
+        # that round-to-nearest is fine and takes minutes.
+        from llmcompressor.modifiers.quantization import QuantizationModifier
         scheme = "W8A8"
-        recipe = [GPTQModifier(ignore=["lm_head"], scheme=scheme, targets=["Linear"])]
+        recipe = [QuantizationModifier(ignore=ignore, scheme=scheme, targets=["Linear"])]
     else:
         from llmcompressor.modifiers.awq import AWQModifier
         scheme = f"W{args.w_bit}A16_ASYM"
-        recipe = [AWQModifier(ignore=["lm_head"], scheme=scheme, targets=["Linear"], duo_scaling="both")]
+        recipe = [AWQModifier(ignore=ignore, scheme=scheme, targets=["Linear"], duo_scaling="both")]
 
     default_split = {"ultrachat-200k": f"train_sft[:{args.calib_samples}]"}.get(
         args.calib_dataset, f"train[:{args.calib_samples}]")
@@ -102,6 +129,13 @@ def main() -> None:
     )
     if args.calib_config:
         oneshot_kwargs["dataset_config_name"] = args.calib_config
+    if is_multimodal:
+        # Pass the full multimodal model object (loaded on CPU; oneshot moves
+        # layers to GPU sequentially) instead of a string, so the save keeps the
+        # ConditionalGeneration wrapper + vision weights.
+        from transformers import AutoModelForImageTextToText
+        oneshot_kwargs["model"] = AutoModelForImageTextToText.from_pretrained(
+            args.model, dtype=torch.bfloat16, trust_remote_code=True, low_cpu_mem_usage=True)
 
     t0 = time.time()
     oneshot(**oneshot_kwargs)

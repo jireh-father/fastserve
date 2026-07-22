@@ -53,9 +53,18 @@ supports. Its output is a vLLM-native `compressed-tensors` checkpoint.
 ## Known gaps
 
 - **Multimodal models** (a real `vision_config` even if you only want the text
-  side — e.g. Qwen3.5-4B) save with a text-only sub-config that breaks vLLM's
-  multimodal wrapper. `batch.py` skips known ones; check `config.json` has no
-  `vision_config` before adding new ones.
+  side — e.g. Qwen3.5/3.6). The pipeline now *detects* these and loads them via
+  `AutoModelForImageTextToText`, ignoring the vision tower, so the save keeps the
+  full multimodal config and the result loads in vLLM (earlier it saved a
+  text-only config vLLM rejected). It also auto-ignores sensitive recurrent /
+  linear-attention blocks (`linear_attn`, `mamba`, `conv1d`) that otherwise
+  degenerate under quantization.
+- **Very large expert-count MoE (e.g. Qwen3.6-35B-A3B, 256 experts) + hybrid
+  linear-attention** is the one combination this pipeline can't do well: the
+  *fast* method (RTN W8A8) is too crude and produces degenerate output even with
+  the recurrent layers ignored, while the *quality* methods (AWQ / GPTQ) run a
+  per-expert search → **hours** across 256 experts. For these, use a
+  purpose-built quant (e.g. the AMD-Quark community W8A8, ~121 tok/s on A100).
 - **Gated bases** (Llama, some Gemma) need the license accepted on the account
   behind `HF_TOKEN`, or the baseline download 403s.
 - **Models too big for a bf16 baseline on one GPU** (e.g. Qwen2.5-72B) can't be

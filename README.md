@@ -30,8 +30,12 @@ Then validated across 25 models / 9 families, 0.5B–72B — see
 | [Yi-1.5-9B-Chat](https://huggingface.co/seoilgun/Yi-1.5-9B-Chat-AWQ) | 8.8B | 0.433 → 0.600 | 38.6 / 77.5 / **173.2** | **4.5×** | 16.45 → 5.0 GiB |
 | [DeepSeek-R1-Distill-Qwen-7B](https://huggingface.co/seoilgun/DeepSeek-R1-Distill-Qwen-7B-AWQ) | 7.6B | 0.767 → 0.867 | 59.3 / 98.2 / **343.7** | **5.8×** | 14.19 → 5.19 GiB |
 | [DeepSeek-R1-0528-Qwen3-8B](https://huggingface.co/seoilgun/DeepSeek-R1-0528-Qwen3-8B-AWQ) | 8.2B | 0.533 → 0.733 | 37.6 / 90.6 / **194.7** | **5.2×** | 15.26 → 5.68 GiB |
+| [Qwen3.6-35B-A3B](https://huggingface.co/Qwen/Qwen3.6-35B-A3B) † | 36B (3B act) | 0.933 → 0.875 | 12.1 / 14.1 / **106.9** | **8.8×** | 67 → 23 GiB |
+| [Qwen3.5-122B-A10B](https://huggingface.co/Qwen/Qwen3.5-122B-A10B) ‡ | 125B (10B act) | — → 0.875 | — / — / **77** | — | 233 → 77 GiB |
 
 Speed in tok/s. **fastserve is 3.8-8.7x faster than out-of-the-box serving and beats plain vLLM on every model here, at ~3x less memory** — accuracy held inside a 10pp gate (small deltas are n=30 noise; several models score *higher* quantized). The two Gemma quants replace community AWQ repos that were **broken** — looping garbage, GSM8K 0.000 — which is why `publish/` gates every checkpoint on accuracy before uploading it.
+
+† **Qwen3.6-35B-A3B** — single GPU. Its bf16 vLLM number (14.1) is eager-only: at 67 GiB the weights leave no room for CUDA graphs on one card (see below). AWQ here is the community `cyankiwi` quant; a community W8A8-INT8 reaches ~121 tok/s.  ‡ **Qwen3.5-122B-A10B** — needs **2 GPUs**; its bf16 (233 GiB) doesn't fit even two 80GB cards, so there's no original/vLLM baseline — AWQ (community `QuantTrio`) is the only way it runs, at 77 tok/s across TP=2.
 
 ### Frontier models on 2xA100-80GB
 

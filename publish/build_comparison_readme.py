@@ -70,6 +70,15 @@ def build() -> str:
         acc = f"{base_acc:.3f} → {our_acc:.3f}"
         lines.append(f"| [{disp}](https://huggingface.co/seoilgun/{disp}-AWQ) | {pB:.1f}B | {acc} | {speed} | {speedup} | {mem} |")
 
+    # Two large MoE models, added for coverage. Only measurable cells are filled;
+    # bf16 doesn't fit a single 80GB card for either, so some columns are n/a.
+    lines.append(
+        "| [Qwen3.6-35B-A3B](https://huggingface.co/Qwen/Qwen3.6-35B-A3B) † | 36B (3B act) | "
+        "0.933 → 0.875 | 12.1 / 14.1 / **106.9** | **8.8×** | 67 → 23 GiB |")
+    lines.append(
+        "| [Qwen3.5-122B-A10B](https://huggingface.co/Qwen/Qwen3.5-122B-A10B) ‡ | 125B (10B act) | "
+        "— → 0.875 | — / — / **77** | — | 233 → 77 GiB |")
+
     lines += [
         "",
         "Speed in tok/s. **fastserve is 3.8-8.7x faster than out-of-the-box serving and beats plain "
@@ -77,6 +86,13 @@ def build() -> str:
         "deltas are n=30 noise; several models score *higher* quantized). The two Gemma quants replace "
         "community AWQ repos that were **broken** — looping garbage, GSM8K 0.000 — which is why "
         "`publish/` gates every checkpoint on accuracy before uploading it.",
+        "",
+        "† **Qwen3.6-35B-A3B** — single GPU. Its bf16 vLLM number (14.1) is eager-only: at 67 GiB the "
+        "weights leave no room for CUDA graphs on one card (see below). AWQ here is the community "
+        "`cyankiwi` quant; a community W8A8-INT8 reaches ~121 tok/s.  "
+        "‡ **Qwen3.5-122B-A10B** — needs **2 GPUs**; its bf16 (233 GiB) doesn't fit even two 80GB "
+        "cards, so there's no original/vLLM baseline — AWQ (community `QuantTrio`) is the only way it "
+        "runs, at 77 tok/s across TP=2.",
         "",
         _large_models_section(),
     ]

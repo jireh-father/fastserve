@@ -16,76 +16,95 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.join(HERE, "..")
 RESULTS = os.path.join(ROOT, "benchmarks", "results")
 
-# base id -> (display, params_B, bf16 gate acc n=30, our AWQ gate acc n=30)
+# base id -> (display, params_B, bf16 baseline acc, our-quant acc, quant suffix)
+# The first 12 are the initial AWQ batch (gate n=30); the last 6 are the 2026
+# frontier batch (gate n=15), each with the format that fits its architecture.
 MODELS = [
-    ("Qwen/Qwen2.5-0.5B-Instruct", "Qwen2.5-0.5B-Instruct", 0.49, 0.333, 0.333),
-    ("Qwen/Qwen2.5-1.5B-Instruct", "Qwen2.5-1.5B-Instruct", 1.54, 0.567, 0.567),
-    ("Qwen/Qwen2.5-7B-Instruct", "Qwen2.5-7B-Instruct", 7.62, 0.867, 0.867),
-    ("Qwen/Qwen2.5-14B-Instruct", "Qwen2.5-14B-Instruct", 14.77, 0.967, 0.933),
-    ("Qwen/Qwen2.5-32B-Instruct", "Qwen2.5-32B-Instruct", 32.76, 0.933, 0.933),
-    ("Qwen/Qwen3-8B", "Qwen3-8B", 8.19, 0.833, 0.833),
-    ("mistralai/Mistral-7B-Instruct-v0.3", "Mistral-7B-Instruct-v0.3", 7.25, 0.400, 0.333),
-    ("google/gemma-2-2b-it", "gemma-2-2b-it", 2.61, 0.533, 0.467),
-    ("google/gemma-2-9b-it", "gemma-2-9b-it", 9.24, 0.700, 0.633),
-    ("01-ai/Yi-1.5-9B-Chat", "Yi-1.5-9B-Chat", 8.83, 0.433, 0.600),
-    ("deepseek-ai/DeepSeek-R1-Distill-Qwen-7B", "DeepSeek-R1-Distill-Qwen-7B", 7.62, 0.767, 0.867),
-    ("deepseek-ai/DeepSeek-R1-0528-Qwen3-8B", "DeepSeek-R1-0528-Qwen3-8B", 8.19, 0.533, 0.733),
+    ("Qwen/Qwen2.5-0.5B-Instruct", "Qwen2.5-0.5B-Instruct", 0.49, 0.333, 0.333, "AWQ"),
+    ("Qwen/Qwen2.5-1.5B-Instruct", "Qwen2.5-1.5B-Instruct", 1.54, 0.567, 0.567, "AWQ"),
+    ("Qwen/Qwen2.5-7B-Instruct", "Qwen2.5-7B-Instruct", 7.62, 0.867, 0.867, "AWQ"),
+    ("Qwen/Qwen2.5-14B-Instruct", "Qwen2.5-14B-Instruct", 14.77, 0.967, 0.933, "AWQ"),
+    ("Qwen/Qwen2.5-32B-Instruct", "Qwen2.5-32B-Instruct", 32.76, 0.933, 0.933, "AWQ"),
+    ("Qwen/Qwen3-8B", "Qwen3-8B", 8.19, 0.833, 0.833, "AWQ"),
+    ("mistralai/Mistral-7B-Instruct-v0.3", "Mistral-7B-Instruct-v0.3", 7.25, 0.400, 0.333, "AWQ"),
+    ("google/gemma-2-2b-it", "gemma-2-2b-it", 2.61, 0.533, 0.467, "AWQ"),
+    ("google/gemma-2-9b-it", "gemma-2-9b-it", 9.24, 0.700, 0.633, "AWQ"),
+    ("01-ai/Yi-1.5-9B-Chat", "Yi-1.5-9B-Chat", 8.83, 0.433, 0.600, "AWQ"),
+    ("deepseek-ai/DeepSeek-R1-Distill-Qwen-7B", "DeepSeek-R1-Distill-Qwen-7B", 7.62, 0.767, 0.867, "AWQ"),
+    ("deepseek-ai/DeepSeek-R1-0528-Qwen3-8B", "DeepSeek-R1-0528-Qwen3-8B", 8.19, 0.533, 0.733, "AWQ"),
+    # 2026 frontier batch (multimodal; gate n=15). Qwen keeps 4-bit AWQ, Gemma-4
+    # uses W8A8-INT8 (A100-optimal + mapping-free — see the frontier section).
+    ("Qwen/Qwen3.6-27B", "Qwen3.6-27B", 27.0, 0.800, 0.800, "AWQ"),
+    ("google/gemma-4-31B-it", "gemma-4-31B-it", 33.0, 0.800, 0.800, "W8A8-INT8"),
+    ("google/gemma-4-26B-A4B-it", "gemma-4-26B-A4B-it", 26.0, 0.533, 0.600, "W8A8-INT8"),
+    ("google/gemma-4-12B-it", "gemma-4-12B-it", 12.0, 0.733, 0.667, "W8A8-INT8"),
+    ("google/gemma-4-E4B-it", "gemma-4-E4B-it", 8.0, 0.467, 0.533, "W8A8-INT8"),
+    ("google/gemma-4-E2B-it", "gemma-4-E2B-it", 5.0, 0.467, 0.467, "W8A8-INT8"),
 ]
 
 
-def load_speed(base):
+def load_cmp(base):
+    """Return the per-config dict {original/vllm/fastserve: {tok_s, weight_gib}}."""
     p = os.path.join(RESULTS, f"cmp_{base.split('/')[-1]}.json")
     if not os.path.exists(p):
         return {}
-    c = json.load(open(p)).get("configs", {})
-    return {k: c.get(k, {}).get("tok_s") for k in ("original", "vllm", "fastserve")}
+    return json.load(open(p)).get("configs", {})
 
 
 def build() -> str:
-    sizes = json.load(open(os.path.join(RESULTS, "model_sizes.json"))) if \
-        os.path.exists(os.path.join(RESULTS, "model_sizes.json")) else {}
-
     lines = [
         "## Benchmark: original vs vLLM vs fastserve",
         "",
-        "12 models self-quantized and published to "
+        "18 models self-quantized and published to "
         "[huggingface.co/glenic](https://huggingface.co/glenic) (see `publish/PUBLISHED.md`). "
-        "One A100-80GB. **Accuracy** = GSM8K (n=30), greedy. **Speed** = single-stream "
-        "(batch-1) decode, tok/s. **Memory** = weights (bf16 vs AWQ 4-bit). "
-        "*original* = naive HF-eager bf16 · *vLLM* = plain vLLM bf16 · "
-        "*fastserve* = its auto-detected AWQ checkpoint + speculative decoding on vLLM.",
+        "One A100-80GB. **Accuracy** = GSM8K greedy (n=30 for the first batch, n=15 for the "
+        "2026 frontier batch). **Speed** = single-stream (batch-1) decode, tok/s. **Memory** = "
+        "weights (bf16 vs quant — 4-bit AWQ or 8-bit W8A8-INT8). *original* = naive HF-eager "
+        "bf16 · *vLLM* = plain vLLM bf16 · *fastserve* = its auto-detected AWQ/W8A8 checkpoint + "
+        "speculative decoding on vLLM. Rows are sorted by model name.",
         "",
-        "| Model | Size | GSM8K acc (orig → fastserve) | Speed, tok/s (orig / vLLM / **fastserve**) | Speedup vs orig | Mem bf16 → AWQ |",
+        "| Model | Size | GSM8K acc (orig → fastserve) | Speed, tok/s (orig / vLLM / **fastserve**) | Speedup vs orig | Mem bf16 → quant |",
         "|---|---|---|---|---|---|",
     ]
-    for base, disp, pB, base_acc, our_acc in MODELS:
-        sp = load_speed(base)
-        o, v, fs = sp.get("original"), sp.get("vllm"), sp.get("fastserve")
+
+    rows = []  # (sort_key, row_str)
+    for base, disp, pB, base_acc, our_acc, suf in MODELS:
+        cfg = load_cmp(base)
+        o = cfg.get("original", {}).get("tok_s")
+        v = cfg.get("vllm", {}).get("tok_s")
+        fs = cfg.get("fastserve", {}).get("tok_s")
         if o and v and fs and fs < v:
             continue  # omit models where fastserve doesn't beat plain vLLM
+        wo = cfg.get("original", {}).get("weight_gib") or cfg.get("vllm", {}).get("weight_gib")
+        wq = cfg.get("fastserve", {}).get("weight_gib")
         speed = f"{o or '—'} / {v or '—'} / **{fs or '—'}**"
         speedup = f"**{round(fs / o, 1)}×**" if (o and fs) else "—"
-        sz = sizes.get(base, {})
-        mem = f"{sz.get('bf16_gib','?')} → {sz.get('awq_gib','?')} GiB" if sz else "—"
+        mem = f"{wo} → {wq} GiB" if (wo and wq) else "—"
         acc = f"{base_acc:.3f} → {our_acc:.3f}"
-        lines.append(f"| [{disp}](https://huggingface.co/glenic/{disp}-AWQ) | {pB:.1f}B | {acc} | {speed} | {speedup} | {mem} |")
+        row = f"| [{disp}](https://huggingface.co/glenic/{disp}-{suf}) | {pB:.1f}B | {acc} | {speed} | {speedup} | {mem} |"
+        rows.append((disp.lower(), row))
 
-    # Two large MoE models, added for coverage. Only measurable cells are filled;
-    # bf16 doesn't fit a single 80GB card for either, so some columns are n/a.
-    lines.append(
+    # Two large community-quant MoE models, kept for coverage (not glenic-published;
+    # bf16 doesn't fit a single 80GB card for either, so some cells are n/a).
+    rows.append(("qwen3.6-35b-a3b",
         "| [Qwen3.6-35B-A3B](https://huggingface.co/Qwen/Qwen3.6-35B-A3B) † | 36B (3B act) | "
-        "0.933 → 0.875 | 12.1 / 14.1 / **106.9** | **8.8×** | 67 → 23 GiB |")
-    lines.append(
+        "0.933 → 0.875 | 12.1 / 14.1 / **106.9** | **8.8×** | 67 → 23 GiB |"))
+    rows.append(("qwen3.5-122b-a10b",
         "| [Qwen3.5-122B-A10B](https://huggingface.co/Qwen/Qwen3.5-122B-A10B) ‡ | 125B (10B act) | "
-        "— → 0.875 | — / — / **77** | — | 233 → 77 GiB |")
+        "— → 0.875 | — / — / **77** | — | 233 → 77 GiB |"))
+
+    for _, row in sorted(rows, key=lambda r: r[0]):
+        lines.append(row)
 
     lines += [
         "",
-        "Speed in tok/s. **fastserve is 3.8-8.7x faster than out-of-the-box serving and beats plain "
-        "vLLM on every model here, at ~3x less memory** — accuracy held inside a 10pp gate (small "
-        "deltas are n=30 noise; several models score *higher* quantized). The two Gemma quants replace "
+        "Speed in tok/s. **fastserve beats plain vLLM on every model here at ~2-3x less memory**, "
+        "3.8-8.7x faster than out-of-the-box serving — accuracy held inside a 10pp gate (small "
+        "deltas are noise; several models score *higher* quantized). The two gemma-2 quants replace "
         "community AWQ repos that were **broken** — looping garbage, GSM8K 0.000 — which is why "
-        "`publish/` gates every checkpoint on accuracy before uploading it.",
+        "`publish/` gates every checkpoint on accuracy before uploading it. Format is per "
+        "architecture: 4-bit AWQ where llm-compressor's mappings resolve, 8-bit W8A8-INT8 "
+        "(A100-optimal, mapping-free) for the multimodal Gemma-4 family.",
         "",
         "† **Qwen3.6-35B-A3B** — single GPU. Its bf16 vLLM number (14.1) is eager-only: at 67 GiB the "
         "weights leave no room for CUDA graphs on one card (see below). AWQ here is the community "
@@ -106,18 +125,11 @@ def _published_frontier_section() -> str:
     the format that fits its architecture, and the ones that couldn't be done here."""
     return """### Newer frontier models — self-quantized & published (2026)
 
-Six more recent releases, each quantized with the format that suits its
-architecture and published to [glenic](https://huggingface.co/glenic) after
-passing the same GSM8K gate. One A100-80GB; GSM8K n=15, greedy.
-
-| Model | Params | Format | GSM8K (bf16 → quant) | Repo |
-|---|---|---|---|---|
-| [Qwen3.6-27B](https://huggingface.co/glenic/Qwen3.6-27B-AWQ) | 27B dense | **AWQ 4-bit** | 0.80 → 0.80 | `glenic/Qwen3.6-27B-AWQ` |
-| [gemma-4-31B-it](https://huggingface.co/glenic/gemma-4-31B-it-W8A8-INT8) | 33B dense (omni) | W8A8-INT8 | 0.80 → 0.80 | `glenic/gemma-4-31B-it-W8A8-INT8` |
-| [gemma-4-26B-A4B-it](https://huggingface.co/glenic/gemma-4-26B-A4B-it-W8A8-INT8) | 26B MoE, 128 experts | W8A8-INT8 | 0.53 → 0.60 | `glenic/gemma-4-26B-A4B-it-W8A8-INT8` |
-| [gemma-4-12B-it](https://huggingface.co/glenic/gemma-4-12B-it-W8A8-INT8) | 12B dense (omni) | W8A8-INT8 | 0.73 → 0.67 | `glenic/gemma-4-12B-it-W8A8-INT8` |
-| [gemma-4-E4B-it](https://huggingface.co/glenic/gemma-4-E4B-it-W8A8-INT8) | 8B elastic | W8A8-INT8 | 0.47 → 0.53 | `glenic/gemma-4-E4B-it-W8A8-INT8` |
-| [gemma-4-E2B-it](https://huggingface.co/glenic/gemma-4-E2B-it-W8A8-INT8) | 5B elastic | W8A8-INT8 | 0.47 → 0.47 | `glenic/gemma-4-E2B-it-W8A8-INT8` |
+Six more recent releases (all in the table above, with 3-way speed) each got the
+format that suits its architecture, published to
+[glenic](https://huggingface.co/glenic) after passing the same GSM8K gate:
+Qwen3.6-27B as **AWQ 4-bit**, and the Gemma-4 family (E2B / E4B / 12B / 26B-A4B /
+31B) as **W8A8-INT8**.
 
 **Format is chosen per architecture, not one-size-fits-all.** Qwen3.x keeps
 **4-bit AWQ** — llm-compressor's dynamic, hybrid-attention-aware mappings resolve

@@ -23,12 +23,21 @@ from eval_tasks import (  # noqa: E402
 
 def run_hf(model: str, n: int, speed_prompts: int) -> dict:
     import torch
-    from transformers import AutoModelForCausalLM, AutoTokenizer
+    from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 
     max_new = 2048 if is_long_thinker(model) else 640
     tok = AutoTokenizer.from_pretrained(model, trust_remote_code=True)
-    m = AutoModelForCausalLM.from_pretrained(
-        model, dtype=torch.bfloat16, trust_remote_code=True).to("cuda").eval()
+    # Multimodal models (Gemma-4, Qwen3.x = *ForConditionalGeneration) don't map
+    # to AutoModelForCausalLM; load the full multimodal model (it generates text
+    # fine from text-only input) so the HF-eager baseline works for them too.
+    cfg = AutoConfig.from_pretrained(model, trust_remote_code=True)
+    if hasattr(cfg, "vision_config"):
+        from transformers import AutoModelForImageTextToText
+        m = AutoModelForImageTextToText.from_pretrained(
+            model, dtype=torch.bfloat16, trust_remote_code=True).to("cuda").eval()
+    else:
+        m = AutoModelForCausalLM.from_pretrained(
+            model, dtype=torch.bfloat16, trust_remote_code=True).to("cuda").eval()
 
     probs = load_gsm8k(n)
     correct, tot_tok, tot_t = 0, 0, 0.0

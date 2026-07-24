@@ -15,25 +15,30 @@ Then validated across 25 models / 9 families, 0.5B–72B — see
 <!-- COMPARISON:START -->
 ## Benchmark: original vs vLLM vs fastserve
 
-12 models self-quantized and published to [huggingface.co/glenic](https://huggingface.co/glenic) (see `publish/PUBLISHED.md`). One A100-80GB. **Accuracy** = GSM8K (n=30), greedy. **Speed** = single-stream (batch-1) decode, tok/s. **Memory** = weights (bf16 vs AWQ 4-bit). *original* = naive HF-eager bf16 · *vLLM* = plain vLLM bf16 · *fastserve* = its auto-detected AWQ checkpoint + speculative decoding on vLLM.
+18 models self-quantized and published to [huggingface.co/glenic](https://huggingface.co/glenic) (see `publish/PUBLISHED.md`). One A100-80GB. **Accuracy** = GSM8K greedy (n=30 for the first batch, n=15 for the 2026 frontier batch). **Speed** = single-stream (batch-1) decode, tok/s. **Memory** = weights (bf16 vs quant — 4-bit AWQ or 8-bit W8A8-INT8). *original* = naive HF-eager bf16 · *vLLM* = plain vLLM bf16 · *fastserve* = its auto-detected AWQ/W8A8 checkpoint + speculative decoding on vLLM. Rows are sorted by model name.
 
-| Model | Size | GSM8K acc (orig → fastserve) | Speed, tok/s (orig / vLLM / **fastserve**) | Speedup vs orig | Mem bf16 → AWQ |
+| Model | Size | GSM8K acc (orig → fastserve) | Speed, tok/s (orig / vLLM / **fastserve**) | Speedup vs orig | Mem bf16 → quant |
 |---|---|---|---|---|---|
-| [Qwen2.5-1.5B-Instruct](https://huggingface.co/glenic/Qwen2.5-1.5B-Instruct-AWQ) | 1.5B | 0.567 → 0.567 | 59.6 / 259.6 / **305.9** | **5.1×** | 2.88 → 1.5 GiB |
-| [Qwen2.5-7B-Instruct](https://huggingface.co/glenic/Qwen2.5-7B-Instruct-AWQ) | 7.6B | 0.867 → 0.867 | 58.2 / 98.1 / **466.5** | **8.0×** | 14.19 → 5.19 GiB |
-| [Qwen2.5-14B-Instruct](https://huggingface.co/glenic/Qwen2.5-14B-Instruct-AWQ) | 14.8B | 0.967 → 0.933 | 35.3 / 51.8 / **281.7** | **8.0×** | 27.51 → 9.29 GiB |
-| [Qwen2.5-32B-Instruct](https://huggingface.co/glenic/Qwen2.5-32B-Instruct-AWQ) | 32.8B | 0.933 → 0.933 | 19.8 / 24.0 / **114.1** | **5.8×** | 61.03 → 18.0 GiB |
-| [Qwen3-8B](https://huggingface.co/glenic/Qwen3-8B-AWQ) | 8.2B | 0.833 → 0.833 | 37.3 / 91.4 / **323.0** | **8.7×** | 15.26 → 5.68 GiB |
-| [Mistral-7B-Instruct-v0.3](https://huggingface.co/glenic/Mistral-7B-Instruct-v0.3-AWQ) | 7.2B | 0.400 → 0.333 | 56.1 / 96.8 / **212.7** | **3.8×** | 27.0 → 3.88 GiB |
+| [DeepSeek-R1-0528-Qwen3-8B](https://huggingface.co/glenic/DeepSeek-R1-0528-Qwen3-8B-AWQ) | 8.2B | 0.533 → 0.733 | 37.6 / 90.6 / **194.7** | **5.2×** | 15.26 → 5.68 GiB |
+| [DeepSeek-R1-Distill-Qwen-7B](https://huggingface.co/glenic/DeepSeek-R1-Distill-Qwen-7B-AWQ) | 7.6B | 0.767 → 0.867 | 59.3 / 98.2 / **343.7** | **5.8×** | 14.19 → 5.19 GiB |
 | [gemma-2-2b-it](https://huggingface.co/glenic/gemma-2-2b-it-AWQ) | 2.6B | 0.533 → 0.467 | 47.1 / 194.8 / **259.3** | **5.5×** | 4.87 → 3.18 GiB |
 | [gemma-2-9b-it](https://huggingface.co/glenic/gemma-2-9b-it-AWQ) | 9.2B | 0.700 → 0.633 | 29.7 / 70.8 / **147.5** | **5.0×** | 17.21 → 7.45 GiB |
-| [Yi-1.5-9B-Chat](https://huggingface.co/glenic/Yi-1.5-9B-Chat-AWQ) | 8.8B | 0.433 → 0.600 | 38.6 / 77.5 / **173.2** | **4.5×** | 16.45 → 5.0 GiB |
-| [DeepSeek-R1-Distill-Qwen-7B](https://huggingface.co/glenic/DeepSeek-R1-Distill-Qwen-7B-AWQ) | 7.6B | 0.767 → 0.867 | 59.3 / 98.2 / **343.7** | **5.8×** | 14.19 → 5.19 GiB |
-| [DeepSeek-R1-0528-Qwen3-8B](https://huggingface.co/glenic/DeepSeek-R1-0528-Qwen3-8B-AWQ) | 8.2B | 0.533 → 0.733 | 37.6 / 90.6 / **194.7** | **5.2×** | 15.26 → 5.68 GiB |
-| [Qwen3.6-35B-A3B](https://huggingface.co/Qwen/Qwen3.6-35B-A3B) † | 36B (3B act) | 0.933 → 0.875 | 12.1 / 14.1 / **106.9** | **8.8×** | 67 → 23 GiB |
+| [gemma-4-12B-it](https://huggingface.co/glenic/gemma-4-12B-it-W8A8-INT8) | 12.0B | 0.733 → 0.667 | 17.0 / 42.2 / **104.4** | **6.1×** | 22.28 → 14.0 GiB |
+| [gemma-4-26B-A4B-it](https://huggingface.co/glenic/gemma-4-26B-A4B-it-W8A8-INT8) | 26.0B | 0.533 → 0.600 | 16.7 / 22.6 / **202.5** | **12.1×** | 48.07 → 26.67 GiB |
+| [gemma-4-31B-it](https://huggingface.co/glenic/gemma-4-31B-it-W8A8-INT8) | 33.0B | 0.800 → 0.800 | 12.1 / 18.4 / **77.2** | **6.4×** | 58.25 → 33.61 GiB |
+| [gemma-4-E4B-it](https://huggingface.co/glenic/gemma-4-E4B-it-W8A8-INT8) | 8.0B | 0.467 → 0.533 | 19.3 / 91.5 / **104.9** | **5.4×** | 14.89 → 12.09 GiB |
+| [Mistral-7B-Instruct-v0.3](https://huggingface.co/glenic/Mistral-7B-Instruct-v0.3-AWQ) | 7.2B | 0.400 → 0.333 | 56.1 / 96.8 / **212.7** | **3.8×** | 27.0 → 3.88 GiB |
+| [Qwen2.5-1.5B-Instruct](https://huggingface.co/glenic/Qwen2.5-1.5B-Instruct-AWQ) | 1.5B | 0.567 → 0.567 | 59.6 / 259.6 / **305.9** | **5.1×** | 2.88 → 1.5 GiB |
+| [Qwen2.5-14B-Instruct](https://huggingface.co/glenic/Qwen2.5-14B-Instruct-AWQ) | 14.8B | 0.967 → 0.933 | 35.3 / 51.8 / **281.7** | **8.0×** | 27.51 → 9.29 GiB |
+| [Qwen2.5-32B-Instruct](https://huggingface.co/glenic/Qwen2.5-32B-Instruct-AWQ) | 32.8B | 0.933 → 0.933 | 19.8 / 24.0 / **114.1** | **5.8×** | 61.03 → 18.0 GiB |
+| [Qwen2.5-7B-Instruct](https://huggingface.co/glenic/Qwen2.5-7B-Instruct-AWQ) | 7.6B | 0.867 → 0.867 | 58.2 / 98.1 / **466.5** | **8.0×** | 14.19 → 5.19 GiB |
+| [Qwen3-8B](https://huggingface.co/glenic/Qwen3-8B-AWQ) | 8.2B | 0.833 → 0.833 | 37.3 / 91.4 / **323.0** | **8.7×** | 15.26 → 5.68 GiB |
 | [Qwen3.5-122B-A10B](https://huggingface.co/Qwen/Qwen3.5-122B-A10B) ‡ | 125B (10B act) | — → 0.875 | — / — / **77** | — | 233 → 77 GiB |
+| [Qwen3.6-27B](https://huggingface.co/glenic/Qwen3.6-27B-AWQ) | 27.0B | 0.800 → 0.800 | 12.4 / 16.4 / **49.8** | **4.0×** | 51.75 → 25.05 GiB |
+| [Qwen3.6-35B-A3B](https://huggingface.co/Qwen/Qwen3.6-35B-A3B) † | 36B (3B act) | 0.933 → 0.875 | 12.1 / 14.1 / **106.9** | **8.8×** | 67 → 23 GiB |
+| [Yi-1.5-9B-Chat](https://huggingface.co/glenic/Yi-1.5-9B-Chat-AWQ) | 8.8B | 0.433 → 0.600 | 38.6 / 77.5 / **173.2** | **4.5×** | 16.45 → 5.0 GiB |
 
-Speed in tok/s. **fastserve is 3.8-8.7x faster than out-of-the-box serving and beats plain vLLM on every model here, at ~3x less memory** — accuracy held inside a 10pp gate (small deltas are n=30 noise; several models score *higher* quantized). The two Gemma quants replace community AWQ repos that were **broken** — looping garbage, GSM8K 0.000 — which is why `publish/` gates every checkpoint on accuracy before uploading it.
+Speed in tok/s. **fastserve beats plain vLLM on every model here at ~2-3x less memory**, 3.8-8.7x faster than out-of-the-box serving — accuracy held inside a 10pp gate (small deltas are noise; several models score *higher* quantized). The two gemma-2 quants replace community AWQ repos that were **broken** — looping garbage, GSM8K 0.000 — which is why `publish/` gates every checkpoint on accuracy before uploading it. Format is per architecture: 4-bit AWQ where llm-compressor's mappings resolve, 8-bit W8A8-INT8 (A100-optimal, mapping-free) for the multimodal Gemma-4 family.
 
 † **Qwen3.6-35B-A3B** — single GPU. Its bf16 vLLM number (14.1) is eager-only: at 67 GiB the weights leave no room for CUDA graphs on one card (see below). AWQ here is the community `cyankiwi` quant; a community W8A8-INT8 reaches ~121 tok/s.  ‡ **Qwen3.5-122B-A10B** — needs **2 GPUs**; its bf16 (233 GiB) doesn't fit even two 80GB cards, so there's no original/vLLM baseline — AWQ (community `QuantTrio`) is the only way it runs, at 77 tok/s across TP=2.
 
@@ -94,18 +99,11 @@ community quant — see the note below on why `publish/` can't re-make it here.)
 
 ### Newer frontier models — self-quantized & published (2026)
 
-Six more recent releases, each quantized with the format that suits its
-architecture and published to [glenic](https://huggingface.co/glenic) after
-passing the same GSM8K gate. One A100-80GB; GSM8K n=15, greedy.
-
-| Model | Params | Format | GSM8K (bf16 → quant) | Repo |
-|---|---|---|---|---|
-| [Qwen3.6-27B](https://huggingface.co/glenic/Qwen3.6-27B-AWQ) | 27B dense | **AWQ 4-bit** | 0.80 → 0.80 | `glenic/Qwen3.6-27B-AWQ` |
-| [gemma-4-31B-it](https://huggingface.co/glenic/gemma-4-31B-it-W8A8-INT8) | 33B dense (omni) | W8A8-INT8 | 0.80 → 0.80 | `glenic/gemma-4-31B-it-W8A8-INT8` |
-| [gemma-4-26B-A4B-it](https://huggingface.co/glenic/gemma-4-26B-A4B-it-W8A8-INT8) | 26B MoE, 128 experts | W8A8-INT8 | 0.53 → 0.60 | `glenic/gemma-4-26B-A4B-it-W8A8-INT8` |
-| [gemma-4-12B-it](https://huggingface.co/glenic/gemma-4-12B-it-W8A8-INT8) | 12B dense (omni) | W8A8-INT8 | 0.73 → 0.67 | `glenic/gemma-4-12B-it-W8A8-INT8` |
-| [gemma-4-E4B-it](https://huggingface.co/glenic/gemma-4-E4B-it-W8A8-INT8) | 8B elastic | W8A8-INT8 | 0.47 → 0.53 | `glenic/gemma-4-E4B-it-W8A8-INT8` |
-| [gemma-4-E2B-it](https://huggingface.co/glenic/gemma-4-E2B-it-W8A8-INT8) | 5B elastic | W8A8-INT8 | 0.47 → 0.47 | `glenic/gemma-4-E2B-it-W8A8-INT8` |
+Six more recent releases (all in the table above, with 3-way speed) each got the
+format that suits its architecture, published to
+[glenic](https://huggingface.co/glenic) after passing the same GSM8K gate:
+Qwen3.6-27B as **AWQ 4-bit**, and the Gemma-4 family (E2B / E4B / 12B / 26B-A4B /
+31B) as **W8A8-INT8**.
 
 **Format is chosen per architecture, not one-size-fits-all.** Qwen3.x keeps
 **4-bit AWQ** — llm-compressor's dynamic, hybrid-attention-aware mappings resolve

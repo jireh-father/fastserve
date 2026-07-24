@@ -1,5 +1,5 @@
 .venv/
-fastserve
+/fastserve   # root-level convenience symlink only — NOT src/fastserve/ package
 __pycache__/
 *.egg-info/
 *.log

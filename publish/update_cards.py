@@ -23,7 +23,7 @@ sys.path.insert(0, HERE)
 from model_card import build_model_card  # noqa: E402
 
 load_dotenv(os.path.join(ROOT, ".env"))
-NS = os.environ.get("FASTSERVE_HF_NAMESPACE", "seoilgun")
+NS = os.environ.get("FASTSERVE_HF_NAMESPACE", "glenic")
 RESULTS = os.path.join(ROOT, "benchmarks", "results")
 
 # base model id -> (repo short name, bf16 baseline acc, our AWQ acc, calib dataset)

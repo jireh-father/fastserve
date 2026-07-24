@@ -11,7 +11,7 @@ they looped garbage tokens instead of answering (see
 ## One command
 
 ```bash
-# writes to $FASTSERVE_HF_NAMESPACE (default seoilgun), needs HF_TOKEN in .env
+# writes to $FASTSERVE_HF_NAMESPACE (default glenic), needs HF_TOKEN in .env
 .venv/bin/python publish/quantize.py --model mistralai/Mistral-7B-Instruct-v0.3
 .venv/bin/python publish/quantize.py --model Qwen/Qwen3-8B --dry-run   # gate only, no upload
 .venv/bin/python publish/batch.py                                       # the whole curated list

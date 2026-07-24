@@ -16,6 +16,14 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "benchmarks"))
 sys.path.insert(0, HERE)
 
+# Load .env so HF_TOKEN is available when this stage is run standalone (not only
+# when quantize.py forwards its environment).
+try:
+    from dotenv import load_dotenv
+    load_dotenv(os.path.join(HERE, "..", ".env"))
+except Exception:
+    pass
+
 from run_bench import gsm8k_eval  # noqa: E402
 from model_card import build_model_card  # noqa: E402
 
@@ -23,8 +31,9 @@ from model_card import build_model_card  # noqa: E402
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--local-dir", required=True)
-    ap.add_argument("--namespace", default=os.environ.get("FASTSERVE_HF_NAMESPACE", "seoilgun"),
-                     help="HF namespace to publish under (env: FASTSERVE_HF_NAMESPACE)")
+    ap.add_argument("--namespace", default=os.environ.get("FASTSERVE_HF_NAMESPACE"),
+                     help="HF namespace to publish under (env: FASTSERVE_HF_NAMESPACE; "
+                          "defaults to the HF_TOKEN account itself)")
     ap.add_argument("--repo-name", default=None, help="defaults to <model-short-name>-AWQ")
     ap.add_argument("--n", type=int, default=30)
     ap.add_argument("--max-drop", type=float, default=0.10,
@@ -33,6 +42,20 @@ def main() -> None:
     ap.add_argument("--dry-run", action="store_true", help="run the gate but skip the actual upload")
     ap.add_argument("--max-model-len", type=int, default=4096)
     args = ap.parse_args()
+
+    # Publish namespace defaults to the token's own account (never a hardcoded
+    # name — the token can only create repos under an account it owns). Resolved
+    # here, before the expensive gate, so an auth/namespace problem fails fast.
+    namespace = args.namespace
+    if not namespace:
+        token = os.environ.get("HF_TOKEN")
+        if not token:
+            print("HF_TOKEN not set and no --namespace given — cannot resolve a "
+                  "publish namespace.", file=sys.stderr)
+            sys.exit(2)
+        from huggingface_hub import HfApi
+        namespace = HfApi(token=token).whoami()["name"]
+        print(f"publish namespace (from HF_TOKEN account): {namespace}", flush=True)
 
     with open(os.path.join(args.local_dir, "_fastserve_quant_meta.json")) as f:
         meta = json.load(f)
@@ -66,7 +89,7 @@ def main() -> None:
     scheme = meta.get("quant_config", {}).get("scheme", "")
     suffix = "W8A8-INT8" if scheme == "W8A8" else "AWQ"
     repo_name = args.repo_name or (source_model.split("/")[-1] + "-" + suffix)
-    repo_id = f"{args.namespace}/{repo_name}"
+    repo_id = f"{namespace}/{repo_name}"
 
     if args.dry_run:
         print(f"(--dry-run: would publish to {repo_id}, skipping actual upload)", flush=True)

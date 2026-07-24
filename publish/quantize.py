@@ -30,8 +30,9 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", required=True)
     ap.add_argument("--out-dir", default=None, help="defaults to publish/artifacts/<model-short-name>")
-    ap.add_argument("--namespace", default=os.environ.get("FASTSERVE_HF_NAMESPACE", "seoilgun"),
-                     help="HF namespace to publish under (env: FASTSERVE_HF_NAMESPACE)")
+    ap.add_argument("--namespace", default=os.environ.get("FASTSERVE_HF_NAMESPACE"),
+                     help="HF namespace to publish under (env: FASTSERVE_HF_NAMESPACE; "
+                          "defaults to the HF_TOKEN account itself)")
     ap.add_argument("--repo-name", default=None)
     ap.add_argument("--n", type=int, default=30)
     ap.add_argument("--max-drop", type=float, default=0.10)
@@ -68,9 +69,11 @@ def main() -> None:
     print(f"\n=== stage 2/2: validate + publish ===", flush=True)
     cmd = [
         VENV_PY, os.path.join(HERE, "validate_and_publish.py"),
-        "--local-dir", out_dir, "--namespace", args.namespace,
+        "--local-dir", out_dir,
         "--n", str(args.n), "--max-drop", str(args.max_drop),
     ]
+    if args.namespace:
+        cmd += ["--namespace", args.namespace]
     if args.repo_name:
         cmd += ["--repo-name", args.repo_name]
     if args.private:

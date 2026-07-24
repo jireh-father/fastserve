@@ -191,7 +191,7 @@ automated quality gate"), now with two concrete reproductions.
 
 **Fixed.** This finding is why `publish/` exists. Both Gemma-2 models were
 re-quantized ourselves, accuracy-gated, and published to
-`seoilgun/gemma-2-2b-it-AWQ` (0.467) and `seoilgun/gemma-2-9b-it-AWQ` (0.633,
+`glenic/gemma-2-2b-it-AWQ` (0.467) and `glenic/gemma-2-9b-it-AWQ` (0.633,
 non-degenerate) — `detect()` now prefers those over the broken community
 repos. See `../publish/PUBLISHED.md`.
 

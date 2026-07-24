@@ -76,8 +76,15 @@ def main() -> None:
     print(f"multimodal: {is_multimodal}", flush=True)
 
     print(f"=== baseline bf16 GSM8K(n={args.n}) ===", flush=True)
-    model = AutoModelForCausalLM.from_pretrained(
-        args.model, dtype=torch.bfloat16, trust_remote_code=True).to("cuda").eval()
+    if is_multimodal:
+        # ConditionalGeneration models don't map to AutoModelForCausalLM; load the
+        # full multimodal model (it generates text fine from text-only input).
+        from transformers import AutoModelForImageTextToText
+        model = AutoModelForImageTextToText.from_pretrained(
+            args.model, dtype=torch.bfloat16, trust_remote_code=True).to("cuda").eval()
+    else:
+        model = AutoModelForCausalLM.from_pretrained(
+            args.model, dtype=torch.bfloat16, trust_remote_code=True).to("cuda").eval()
     baseline = run_hf_eager_gsm8k(model, tok, args.n, long_thinker)
     print(f"baseline acc = {baseline['acc']}", flush=True)
 
@@ -92,58 +99,91 @@ def main() -> None:
     # also keeps its weights in the saved checkpoint at full precision.)
     ignore = ["lm_head"]
     if is_multimodal:
-        ignore += ["re:.*visual.*", "re:.*vision.*", "re:.*merger.*"]
+        # Never quantize the non-text towers. vLLM's multimodal loaders expect these
+        # sub-projections at full precision — if llm-compressor quantizes e.g.
+        # `embed_audio.embedding_projection`, vLLM rejects the checkpoint at load
+        # ("no parameter named ...weight_scale"). Gemma-4 *Unified* omni models carry
+        # both a vision AND an audio tower, so cover audio too (not just vision).
+        ignore += ["re:.*visual.*", "re:.*vision.*", "re:.*merger.*",
+                   "re:.*audio.*", "re:.*embed_audio.*", "re:.*embed_vision.*"]
     # Recurrent / linear-attention blocks (Gated DeltaNet, Mamba, short-conv) are
     # extremely sensitive to weight quantization — their state accumulates error
     # over the sequence, so a quantized model starts coherent then degenerates
     # (observed on Qwen3.6-35B's `linear_attn`). Keep them full precision; they're
     # a small fraction of the weights. Patterns are no-ops on models without them.
     ignore += ["re:.*linear_attn.*", "re:.*mamba.*", "re:.*conv1d.*", "re:.*\\.gate$"]
-
-    if args.method == "w8a8":
-        # RTN (min-max weights + dynamic per-token INT8 activations), NOT GPTQ —
-        # GPTQ solves a Hessian per weight matrix, which on a 256-expert MoE means
-        # tens of thousands of per-expert solves (~hours). INT8 is forgiving enough
-        # that round-to-nearest is fine and takes minutes.
-        from llmcompressor.modifiers.quantization import QuantizationModifier
-        scheme = "W8A8"
-        recipe = [QuantizationModifier(ignore=ignore, scheme=scheme, targets=["Linear"])]
-    else:
-        from llmcompressor.modifiers.awq import AWQModifier
-        scheme = f"W{args.w_bit}A16_ASYM"
-        recipe = [AWQModifier(ignore=ignore, scheme=scheme, targets=["Linear"], duo_scaling="both")]
+    # The MoE *router* (a tiny Linear that picks which experts each token goes to)
+    # must stay full precision — INT8-ing it corrupts routing and the model
+    # degenerates into repeated-token garbage (observed on gemma-4-26B-A4B: the
+    # `router.proj` got quantized → GSM8K 0.53→0.00, 87% degenerate). The experts'
+    # own `gate_proj`/`up_proj`/`down_proj` are ordinary FFN weights and stay
+    # quantized; only the routing network is protected. No-op on dense models.
+    ignore += ["re:.*router.*", "re:.*\\.gate\\.", "re:.*block_sparse_moe.gate.*"]
 
     default_split = {"ultrachat-200k": f"train_sft[:{args.calib_samples}]"}.get(
         args.calib_dataset, f"train[:{args.calib_samples}]")
     split = args.calib_split or default_split
 
-    oneshot_kwargs = dict(
-        model=args.model,
-        dataset=args.calib_dataset,
-        splits=split,
-        recipe=recipe,
-        max_seq_length=args.calib_seq_len,
-        num_calibration_samples=args.calib_samples,
-        output_dir=args.out_dir,
-        trust_remote_code_model=True,
-    )
-    if args.calib_config:
-        oneshot_kwargs["dataset_config_name"] = args.calib_config
-    if is_multimodal:
-        # Pass the full multimodal model object (loaded on CPU; oneshot moves
-        # layers to GPU sequentially) instead of a string, so the save keeps the
-        # ConditionalGeneration wrapper + vision weights.
-        from transformers import AutoModelForImageTextToText
-        oneshot_kwargs["model"] = AutoModelForImageTextToText.from_pretrained(
-            args.model, dtype=torch.bfloat16, trust_remote_code=True, low_cpu_mem_usage=True)
+    def _build_recipe(method):
+        if method == "w8a8":
+            # RTN (min-max weights + dynamic per-token INT8 activations), NOT GPTQ —
+            # GPTQ solves a Hessian per weight matrix, which on a big-expert MoE means
+            # tens of thousands of per-expert solves (~hours). INT8 is forgiving enough
+            # that round-to-nearest is fine and takes minutes. It also needs NO
+            # smooth-layer mappings, so it's robust to any architecture (see fallback).
+            from llmcompressor.modifiers.quantization import QuantizationModifier
+            return "W8A8", [QuantizationModifier(ignore=ignore, scheme="W8A8", targets=["Linear"])]
+        from llmcompressor.modifiers.awq import AWQModifier
+        s = f"W{args.w_bit}A16_ASYM"
+        return s, [AWQModifier(ignore=ignore, scheme=s, targets=["Linear"], duo_scaling="both")]
 
+    def _run(method):
+        s, recipe = _build_recipe(method)
+        kwargs = dict(
+            model=args.model, dataset=args.calib_dataset, splits=split, recipe=recipe,
+            max_seq_length=args.calib_seq_len, num_calibration_samples=args.calib_samples,
+            output_dir=args.out_dir, trust_remote_code_model=True,
+        )
+        if args.calib_config:
+            kwargs["dataset_config_name"] = args.calib_config
+        if is_multimodal:
+            # Pass the full multimodal model object (loaded fresh each attempt — a
+            # failed AWQ pass leaves the module tree half-transformed) so the save
+            # keeps the ConditionalGeneration wrapper + vision weights.
+            from transformers import AutoModelForImageTextToText
+            kwargs["model"] = AutoModelForImageTextToText.from_pretrained(
+                args.model, dtype=torch.bfloat16, trust_remote_code=True, low_cpu_mem_usage=True)
+        oneshot(**kwargs)
+        return s
+
+    # AWQ needs per-decoder-layer smooth→balance mappings. For multimodal wrappers
+    # whose class isn't in llm-compressor's mapping registry (e.g.
+    # Gemma4ForConditionalGeneration), it falls back to generic mappings that can't
+    # segment the nested `language_model.layers.*` tree and raises. W8A8 RTN needs no
+    # mappings and, on A100 (INT8 tensor cores, no FP8), is actually the faster format
+    # anyway — so fall back to it rather than failing the model outright.
     t0 = time.time()
-    oneshot(**oneshot_kwargs)
+    method_used = args.method
+    try:
+        scheme = _run(args.method)
+    except Exception as e:
+        emsg = str(e)
+        if args.method == "awq" and ("smoothlayer" in emsg or "AWQMapping" in emsg
+                                     or "single smooth" in emsg or "match_modules" in emsg):
+            print(f"AWQ mapping failed on this architecture ({type(e).__name__}); "
+                  f"falling back to W8A8 RTN (mapping-free, A100-optimal)", flush=True)
+            gc.collect()
+            torch.cuda.empty_cache()
+            method_used = "w8a8"
+            scheme = _run("w8a8")
+        else:
+            raise
     quant_wall_s = round(time.time() - t0, 1)
-    print(f"quantize done ({quant_wall_s}s)", flush=True)
+    print(f"quantize done ({quant_wall_s}s, method={method_used}, scheme={scheme})", flush=True)
 
     quant_config = {"backend": "llm-compressor", "scheme": scheme, "group_size": args.q_group_size,
-                     "calib_dataset": args.calib_dataset, "calib_samples": args.calib_samples}
+                     "calib_dataset": args.calib_dataset, "calib_samples": args.calib_samples,
+                     "method": method_used}
     meta = {
         "model": args.model, "baseline": baseline, "quant_config": quant_config,
         "quant_wall_s": quant_wall_s, "long_thinker": long_thinker,

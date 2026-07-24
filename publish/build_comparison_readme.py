@@ -49,7 +49,7 @@ def build() -> str:
         "## Benchmark: original vs vLLM vs fastserve",
         "",
         "12 models self-quantized and published to "
-        "[huggingface.co/seoilgun](https://huggingface.co/seoilgun) (see `publish/PUBLISHED.md`). "
+        "[huggingface.co/glenic](https://huggingface.co/glenic) (see `publish/PUBLISHED.md`). "
         "One A100-80GB. **Accuracy** = GSM8K (n=30), greedy. **Speed** = single-stream "
         "(batch-1) decode, tok/s. **Memory** = weights (bf16 vs AWQ 4-bit). "
         "*original* = naive HF-eager bf16 · *vLLM* = plain vLLM bf16 · "
@@ -68,7 +68,7 @@ def build() -> str:
         sz = sizes.get(base, {})
         mem = f"{sz.get('bf16_gib','?')} → {sz.get('awq_gib','?')} GiB" if sz else "—"
         acc = f"{base_acc:.3f} → {our_acc:.3f}"
-        lines.append(f"| [{disp}](https://huggingface.co/seoilgun/{disp}-AWQ) | {pB:.1f}B | {acc} | {speed} | {speedup} | {mem} |")
+        lines.append(f"| [{disp}](https://huggingface.co/glenic/{disp}-AWQ) | {pB:.1f}B | {acc} | {speed} | {speedup} | {mem} |")
 
     # Two large MoE models, added for coverage. Only measurable cells are filled;
     # bf16 doesn't fit a single 80GB card for either, so some columns are n/a.
@@ -95,8 +95,46 @@ def build() -> str:
         "runs, at 77 tok/s across TP=2.",
         "",
         _large_models_section(),
+        "",
+        _published_frontier_section(),
     ]
     return "\n".join(lines)
+
+
+def _published_frontier_section() -> str:
+    """The 6 recent frontier models self-quantized + published in 2026, each with
+    the format that fits its architecture, and the ones that couldn't be done here."""
+    return """### Newer frontier models — self-quantized & published (2026)
+
+Six more recent releases, each quantized with the format that suits its
+architecture and published to [glenic](https://huggingface.co/glenic) after
+passing the same GSM8K gate. One A100-80GB; GSM8K n=15, greedy.
+
+| Model | Params | Format | GSM8K (bf16 → quant) | Repo |
+|---|---|---|---|---|
+| [Qwen3.6-27B](https://huggingface.co/glenic/Qwen3.6-27B-AWQ) | 27B dense | **AWQ 4-bit** | 0.80 → 0.80 | `glenic/Qwen3.6-27B-AWQ` |
+| [gemma-4-31B-it](https://huggingface.co/glenic/gemma-4-31B-it-W8A8-INT8) | 33B dense (omni) | W8A8-INT8 | 0.80 → 0.80 | `glenic/gemma-4-31B-it-W8A8-INT8` |
+| [gemma-4-26B-A4B-it](https://huggingface.co/glenic/gemma-4-26B-A4B-it-W8A8-INT8) | 26B MoE, 128 experts | W8A8-INT8 | 0.53 → 0.60 | `glenic/gemma-4-26B-A4B-it-W8A8-INT8` |
+| [gemma-4-12B-it](https://huggingface.co/glenic/gemma-4-12B-it-W8A8-INT8) | 12B dense (omni) | W8A8-INT8 | 0.73 → 0.67 | `glenic/gemma-4-12B-it-W8A8-INT8` |
+| [gemma-4-E4B-it](https://huggingface.co/glenic/gemma-4-E4B-it-W8A8-INT8) | 8B elastic | W8A8-INT8 | 0.47 → 0.53 | `glenic/gemma-4-E4B-it-W8A8-INT8` |
+| [gemma-4-E2B-it](https://huggingface.co/glenic/gemma-4-E2B-it-W8A8-INT8) | 5B elastic | W8A8-INT8 | 0.47 → 0.47 | `glenic/gemma-4-E2B-it-W8A8-INT8` |
+
+**Format is chosen per architecture, not one-size-fits-all.** Qwen3.x keeps
+**4-bit AWQ** — llm-compressor's dynamic, hybrid-attention-aware mappings resolve
+it cleanly. Gemma-4 uses **W8A8-INT8**: on A100 (INT8 tensor cores, no FP8) it's
+the faster format, and it avoids AWQ's per-layer smooth mappings, which aren't
+registered for Gemma's multimodal wrapper. The pipeline auto-keeps at full
+precision the parts quantization would break — the **vision and audio towers** on
+the omni models, and the **MoE router**: INT8-ing the 128-expert router collapses
+routing into repeated-token garbage (GSM8K 0.53 → 0.00) until it's protected.
+
+**Couldn't be published from this box** (documented, not a fastserve limitation):
+
+| Model | Why not |
+|---|---|
+| Kimi-Linear-48B-A3B | custom tokenizer import + 256-expert MoE + linear attention — the one combination the pipeline can't quantize cleanly (same class as Qwen3.6-35B) |
+| Leanstral-1.5-119B-A6B | bf16 weights are ~238 GiB — can't be loaded to quantize on 2×80 GiB, and there's no baseline to gate against |
+| gpt-oss-120b / gpt-oss-20b | already ship **native MXFP4** — they're 4-bit out of the box, so re-quantizing them gains nothing |"""
 
 
 def _large_models_section() -> str:

@@ -100,8 +100,11 @@ def build() -> str:
 
     lines += [
         "",
-        "Speed in tok/s. **fastserve beats plain vLLM on every model here at ~2-3x less memory**, "
-        "3.8-8.7x faster than out-of-the-box serving — accuracy held inside a 10pp gate (small "
+        "Speed in tok/s. The *vLLM* column is plain vLLM on the **original bf16 weights** (no "
+        "quantization, no speculation) — the out-of-the-box baseline, not vLLM's ceiling; "
+        "see the breakdown below for how much of the gap is quantization vs speculation. "
+        "**fastserve is 3.8-8.7x faster than out-of-the-box serving at ~2-3x less memory** "
+        "— accuracy held inside a 10pp gate (small "
         "deltas are noise; several models score *higher* quantized). The two gemma-2 quants replace "
         "community AWQ repos that were **broken** — looping garbage, GSM8K 0.000 — which is why "
         "`publish/` gates every checkpoint on accuracy before uploading it. Format is per "
@@ -116,11 +119,46 @@ def build() -> str:
         "cards, so there's no original/vLLM baseline — AWQ (community `QuantTrio`) is the only way it "
         "runs, at 77 tok/s across TP=2.",
         "",
+        _ablation_section(),
+        "",
         _large_models_section(),
         "",
         _published_frontier_section(),
     ]
     return "\n".join(lines)
+
+
+def _ablation_section() -> str:
+    """Split fastserve's gain over plain vLLM into quantization vs speculation."""
+    return """### Where the speedup actually comes from
+
+The *vLLM* column above is plain vLLM on the **original bf16 weights** — i.e. what
+you get by pointing vLLM at the model id, with no quantization and no speculative
+decoding. So the gap between it and *fastserve* mixes two separate effects. vLLM
+can of course serve the quantized checkpoint too (that's exactly what fastserve
+runs it as), so here is the missing fourth configuration measured directly:
+
+| Model | vLLM bf16 | vLLM + our quant | fastserve (quant + spec) | quantization | speculation |
+|---|---|---|---|---|---|
+| SOLAR-10.7B-Instruct-v1.0 (AWQ, n-gram) | 51.8 | 120.6 | 132.0 | **2.33x** | 1.09x |
+| gemma-4-12B-it (W8A8, EAGLE-3) | 42.2 | 59.5 | 104.4 | 1.41x | **1.75x** |
+| gemma-4-26B-A4B-it (W8A8, EAGLE-3) | 22.6 | 128.3 | 202.5 | **5.68x** | **1.58x** |
+
+Two things worth being straight about:
+
+- **Most of the headline gain is quantization**, and quantization is not
+  fastserve's invention — you'd get the same by passing a good quantized
+  checkpoint to vLLM yourself. What fastserve does is *find* one (and, via
+  `publish/`, prove it didn't lose accuracy) so you don't have to.
+- **Speculative decoding is worth real time only when a compatible EAGLE-3 head
+  exists** — 1.6-1.8x on the two Gemma-4 models, but just 1.09x on SOLAR where
+  detection falls back to n-gram. That's the part of the number that isn't
+  available by just switching checkpoints.
+
+The 26B-A4B row shows why quantization dominates on larger models: at 48 GiB its
+bf16 weights leave no room for CUDA graphs on one 80GB card, so plain vLLM is
+stuck in eager mode at 22.6 tok/s. Shrinking the weights is what unlocks the
+graphs, not any change of engine."""
 
 
 def _published_frontier_section() -> str:

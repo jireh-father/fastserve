@@ -118,9 +118,15 @@ routing into repeated-token garbage (GSM8K 0.53 → 0.00) until it's protected.
 
 | Model | Why not |
 |---|---|
+| Kimi-K3 | ships **already MXFP4-quantized at 1.45 TiB** — 9x this box's 160 GiB of VRAM (needs ~21×A100-80GB / ~12×H200), and vLLM 0.24 doesn't yet register its `KimiK3ForConditionalGeneration` arch. Nothing to requant: it's already 4-bit |
 | Kimi-Linear-48B-A3B | custom tokenizer import + 256-expert MoE + linear attention — the one combination the pipeline can't quantize cleanly (same class as Qwen3.6-35B) |
 | Leanstral-1.5-119B-A6B | bf16 weights are ~238 GiB — can't be loaded to quantize on 2×80 GiB, and there's no baseline to gate against |
 | gpt-oss-120b / gpt-oss-20b | already ship **native MXFP4** — they're 4-bit out of the box, so re-quantizing them gains nothing |
+
+For models in that last category, `detect()` now says so explicitly — it reads
+the checkpoint's own `quantization_config` and reports *"model already ships
+quantized (mxfp4) -> serving as-is"* instead of hunting for a community requant
+that shouldn't exist and mislabelling 4-bit weights as "original precision".
 <!-- COMPARISON:END -->
 
 ## Install

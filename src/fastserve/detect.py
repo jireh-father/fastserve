@@ -50,7 +50,8 @@ _TRUSTED_NAMESPACES = [
 class DetectionResult:
     base_model: str
     quantized_model: str | None = None
-    quant_method: str | None = None  # "awq" | "gptq" | None
+    quant_method: str | None = None  # "awq" | "gptq" | "w8a8" | None
+    self_quantized: str | None = None  # format the base model already ships in
     eagle_model: str | None = None
     notes: list[str] = field(default_factory=list)
 
@@ -145,6 +146,31 @@ def _eagle_config_ok(repo_id: str) -> bool:
     return True
 
 
+def self_quantized(model_id: str) -> str | None:
+    """Return the quantization format a model *already ships in*, if any.
+
+    A growing number of releases are published pre-quantized by their authors
+    (gpt-oss and Kimi-K3 ship MXFP4, some ship FP8/AWQ directly). Serving those
+    needs no requant search at all — looking for a community "-AWQ" repo is
+    wasted work, and reporting "serving at original precision" is actively
+    misleading since the original precision *is* 4-bit.
+    """
+    try:
+        import json as _json
+
+        from huggingface_hub import hf_hub_download
+        cfg = _json.load(open(hf_hub_download(model_id, "config.json")))
+        qc = cfg.get("quantization_config") or \
+            (cfg.get("text_config") or {}).get("quantization_config")
+        if not qc:
+            return None
+        fmt = qc.get("format") or qc.get("quant_method") or "quantized"
+        bits = ((qc.get("config_groups") or {}).get("group_0") or {}).get("weights", {}).get("num_bits")
+        return f"{fmt}" + (f" ({bits}-bit)" if bits else "")
+    except Exception:
+        return None
+
+
 def find_eagle3(model_id: str) -> str | None:
     """Search for a published EAGLE-3 draft head compatible with model_id."""
     name = _short_name(model_id)
@@ -179,12 +205,20 @@ def detect(model_id: str, *, skip_quant: bool = False, skip_eagle: bool = False)
     res = DetectionResult(base_model=model_id)
 
     if not skip_quant:
-        q_repo, q_method = find_quantized(model_id)
-        if q_repo:
-            res.quantized_model, res.quant_method = q_repo, q_method
-            res.notes.append(f"found pre-quantized checkpoint: {q_repo} ({q_method.upper()})")
+        native = self_quantized(model_id)
+        if native:
+            # Already quantized by its own authors — requanting it would only lose
+            # accuracy, so serve the checkpoint as-is.
+            res.self_quantized = native
+            res.notes.append(f"model already ships quantized ({native}) -> serving as-is, "
+                             f"no requant needed")
         else:
-            res.notes.append("no pre-quantized checkpoint found -> serving at original precision")
+            q_repo, q_method = find_quantized(model_id)
+            if q_repo:
+                res.quantized_model, res.quant_method = q_repo, q_method
+                res.notes.append(f"found pre-quantized checkpoint: {q_repo} ({q_method.upper()})")
+            else:
+                res.notes.append("no pre-quantized checkpoint found -> serving at original precision")
 
     if not skip_eagle:
         eagle = find_eagle3(model_id)

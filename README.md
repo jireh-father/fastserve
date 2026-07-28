@@ -15,7 +15,7 @@ Then validated across 25 models / 9 families, 0.5B–72B — see
 <!-- COMPARISON:START -->
 ## Benchmark: original vs vLLM vs fastserve
 
-18 models self-quantized and published to [huggingface.co/glenic](https://huggingface.co/glenic) (see `publish/PUBLISHED.md`). One A100-80GB. **Accuracy** = GSM8K greedy (n=30 for the first batch, n=15 for the 2026 frontier batch). **Speed** = single-stream (batch-1) decode, tok/s. **Memory** = weights (bf16 vs quant — 4-bit AWQ or 8-bit W8A8-INT8). *original* = naive HF-eager bf16 · *vLLM* = plain vLLM bf16 · *fastserve* = its auto-detected AWQ/W8A8 checkpoint + speculative decoding on vLLM. Rows are sorted by model name.
+20 models self-quantized and published to [huggingface.co/glenic](https://huggingface.co/glenic) (see `publish/PUBLISHED.md`). One A100-80GB. **Accuracy** = GSM8K greedy (n=30 for the first batch, n=15 for the 2026 frontier batch). **Speed** = single-stream (batch-1) decode, tok/s. **Memory** = weights (bf16 vs quant — 4-bit AWQ or 8-bit W8A8-INT8). *original* = naive HF-eager bf16 · *vLLM* = plain vLLM bf16 · *fastserve* = its auto-detected AWQ/W8A8 checkpoint + speculative decoding on vLLM. Rows are sorted by model name.
 
 | Model | Size | GSM8K acc (orig → fastserve) | Speed, tok/s (orig / vLLM / **fastserve**) | Speedup vs orig | Mem bf16 → quant |
 |---|---|---|---|---|---|
@@ -36,9 +36,11 @@ Then validated across 25 models / 9 families, 0.5B–72B — see
 | [Qwen3.5-122B-A10B](https://huggingface.co/Qwen/Qwen3.5-122B-A10B) ‡ | 125B (10B act) | — → 0.875 | — / — / **77** | — | 233 → 77 GiB |
 | [Qwen3.6-27B](https://huggingface.co/glenic/Qwen3.6-27B-AWQ) | 27.0B | 0.800 → 0.800 | 12.4 / 16.4 / **49.8** | **4.0×** | 51.75 → 25.05 GiB |
 | [Qwen3.6-35B-A3B](https://huggingface.co/Qwen/Qwen3.6-35B-A3B) † | 36B (3B act) | 0.933 → 0.875 | 12.1 / 14.1 / **106.9** | **8.8×** | 67 → 23 GiB |
+| [SOLAR-10.7B-Instruct-v1.0](https://huggingface.co/glenic/SOLAR-10.7B-Instruct-v1.0-AWQ) | 10.7B | 0.533 → 0.533 | 17.5 / 51.8 / **132.0** | **7.5×** | 19.99 → 5.55 GiB |
+| [solar-pro-preview-instruct](https://huggingface.co/glenic/solar-pro-preview-instruct-W8A8-INT8) | 22.1B | 0.800 → 0.733 | — / 27.1 / **53.3** | — | 41.24 → 20.93 GiB |
 | [Yi-1.5-9B-Chat](https://huggingface.co/glenic/Yi-1.5-9B-Chat-AWQ) | 8.8B | 0.433 → 0.600 | 38.6 / 77.5 / **173.2** | **4.5×** | 16.45 → 5.0 GiB |
 
-Speed in tok/s. **fastserve beats plain vLLM on every model here at ~2-3x less memory**, 3.8-8.7x faster than out-of-the-box serving — accuracy held inside a 10pp gate (small deltas are noise; several models score *higher* quantized). The two gemma-2 quants replace community AWQ repos that were **broken** — looping garbage, GSM8K 0.000 — which is why `publish/` gates every checkpoint on accuracy before uploading it. Format is per architecture: 4-bit AWQ where llm-compressor's mappings resolve, 8-bit W8A8-INT8 (A100-optimal, mapping-free) for the multimodal Gemma-4 family.
+Speed in tok/s. **fastserve beats plain vLLM on every model here at ~2-3x less memory**, 3.8-8.7x faster than out-of-the-box serving — accuracy held inside a 10pp gate (small deltas are noise; several models score *higher* quantized). The two gemma-2 quants replace community AWQ repos that were **broken** — looping garbage, GSM8K 0.000 — which is why `publish/` gates every checkpoint on accuracy before uploading it. Format is per architecture: 4-bit AWQ where llm-compressor's mappings resolve, 8-bit W8A8-INT8 (A100-optimal, mapping-free) for the multimodal Gemma-4 family and for Solar, whose depth-up-scaled layers no AWQ mapping matches.
 
 † **Qwen3.6-35B-A3B** — single GPU. Its bf16 vLLM number (14.1) is eager-only: at 67 GiB the weights leave no room for CUDA graphs on one card (see below). AWQ here is the community `cyankiwi` quant; a community W8A8-INT8 reaches ~121 tok/s.  ‡ **Qwen3.5-122B-A10B** — needs **2 GPUs**; its bf16 (233 GiB) doesn't fit even two 80GB cards, so there's no original/vLLM baseline — AWQ (community `QuantTrio`) is the only way it runs, at 77 tok/s across TP=2.
 

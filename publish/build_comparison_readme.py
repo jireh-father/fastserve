@@ -40,6 +40,8 @@ MODELS = [
     ("google/gemma-4-12B-it", "gemma-4-12B-it", 12.0, 0.733, 0.667, "W8A8-INT8"),
     ("google/gemma-4-E4B-it", "gemma-4-E4B-it", 8.0, 0.467, 0.533, "W8A8-INT8"),
     ("google/gemma-4-E2B-it", "gemma-4-E2B-it", 5.0, 0.467, 0.467, "W8A8-INT8"),
+    ("upstage/SOLAR-10.7B-Instruct-v1.0", "SOLAR-10.7B-Instruct-v1.0", 10.7, 0.533, 0.533, "AWQ"),
+    ("upstage/solar-pro-preview-instruct", "solar-pro-preview-instruct", 22.1, 0.800, 0.733, "W8A8-INT8"),
 ]
 
 
@@ -55,7 +57,7 @@ def build() -> str:
     lines = [
         "## Benchmark: original vs vLLM vs fastserve",
         "",
-        "18 models self-quantized and published to "
+        "20 models self-quantized and published to "
         "[huggingface.co/glenic](https://huggingface.co/glenic) (see `publish/PUBLISHED.md`). "
         "One A100-80GB. **Accuracy** = GSM8K greedy (n=30 for the first batch, n=15 for the "
         "2026 frontier batch). **Speed** = single-stream (batch-1) decode, tok/s. **Memory** = "
@@ -104,7 +106,8 @@ def build() -> str:
         "community AWQ repos that were **broken** — looping garbage, GSM8K 0.000 — which is why "
         "`publish/` gates every checkpoint on accuracy before uploading it. Format is per "
         "architecture: 4-bit AWQ where llm-compressor's mappings resolve, 8-bit W8A8-INT8 "
-        "(A100-optimal, mapping-free) for the multimodal Gemma-4 family.",
+        "(A100-optimal, mapping-free) for the multimodal Gemma-4 family and for Solar, whose "
+        "depth-up-scaled layers no AWQ mapping matches.",
         "",
         "† **Qwen3.6-35B-A3B** — single GPU. Its bf16 vLLM number (14.1) is eager-only: at 67 GiB the "
         "weights leave no room for CUDA graphs on one card (see below). AWQ here is the community "

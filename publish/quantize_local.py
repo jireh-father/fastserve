@@ -34,6 +34,100 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "benchmarks"))
 from eval_tasks import is_long_thinker, run_hf_eager_gsm8k  # noqa: E402
 
 
+def _vllm_baseline(model_id: str, n: int) -> dict | None:
+    """Measure the bf16 baseline through vLLM instead of HF-eager.
+
+    Runs as its own subprocess: vLLM needs a clean CUDA context, and this stage
+    still has to load the model for quantization afterwards. Returns the same
+    shape run_hf_eager_gsm8k does, or None if vLLM can't serve it either.
+    """
+    import re
+    import subprocess
+
+    here = os.path.dirname(os.path.abspath(__file__))
+    worker = os.path.join(here, "..", "benchmarks", "compare3_worker.py")
+    cmd = [sys.executable, worker, "--mode", "vllm", "--model", model_id, "--n", str(n)]
+    proc = subprocess.run(cmd, capture_output=True, text=True, env=os.environ)
+    m = re.search(r"^RESULT (\{.*\})$", proc.stdout, re.MULTILINE)
+    if not m:
+        print("vLLM baseline also failed:\n" + (proc.stdout + proc.stderr)[-400:], flush=True)
+        return None
+    res = json.loads(m.group(1))
+    return {"n": n, "acc": res["acc"], "truncated": 0, "max_new_tokens": None,
+            "wall_s": None, "samples": [], "source": "vllm-bf16"}
+
+
+def _install_tied_weights_shim() -> None:
+    """Tolerate the old list form of `_tied_weights_keys` when saving.
+
+    transformers changed `_tied_weights_keys` from a list of tied parameter names
+    to a dict mapping tied name -> source name, and `save_pretrained` now calls
+    `.keys()` on it. Custom modeling code written before that still declares a
+    list, so saving a quantized checkpoint dies with "'list' object has no
+    attribute 'keys'" *after* the expensive quantization pass (hit by
+    upstage/solar-pro-preview-instruct). Normalize lists to dicts at collection
+    time — the values are only used to locate the source tensor, and for these
+    models nothing is actually tied (tie_word_embeddings=False).
+    """
+    try:
+        from transformers import modeling_utils
+    except Exception:
+        return
+    orig = getattr(modeling_utils, "_get_tied_weight_keys", None)
+    if orig is None or getattr(orig, "_fastserve_shim", False):
+        return
+
+    def _get_tied_weight_keys(module):  # noqa: ANN001
+        keys = []
+        for name, sub in module.named_modules():
+            tied = getattr(sub, "_tied_weights_keys", None) or {}
+            names = tied if isinstance(tied, (list, tuple, set)) else tied.keys()
+            keys.extend([f"{name}.{k}" if name else k for k in names])
+        return keys
+
+    _get_tied_weight_keys._fastserve_shim = True
+    modeling_utils._get_tied_weight_keys = _get_tied_weight_keys
+
+
+def _install_legacy_cache_shims() -> None:
+    """Restore Cache methods that transformers removed, for models whose bundled
+    custom modeling code predates the change.
+
+    A model that ships its own `modeling_*.py` is frozen at whatever transformers
+    API existed when it was published; loading it under a much newer transformers
+    then dies on APIs that no longer exist. Two seen in practice:
+    `DynamicCache.get_max_length()` (renamed to `get_max_cache_shape()`, hit by
+    upstage/solar-pro-preview-instruct) and `.seen_tokens` (now `get_seq_length()`,
+    hit by Phi-3.5-mini). Re-adding them as thin aliases is safe — they're the
+    same values under new names — and it's the difference between a model being
+    quantizable here or not. Only defines what's actually missing.
+    """
+    try:
+        from transformers.cache_utils import Cache, DynamicCache
+    except Exception:
+        return
+    _install_tied_weights_shim()
+
+    for cls in (Cache, DynamicCache):
+        if not hasattr(cls, "get_max_length"):
+            def get_max_length(self):  # noqa: ANN001
+                fn = getattr(self, "get_max_cache_shape", None)
+                v = fn() if fn else None
+                # The new API can return a full cache *shape* tuple, but the old
+                # one returned a single length that callers compare numerically
+                # (`cache_length + seq_len > max_cache_length`) — a tuple there
+                # raises TypeError. Take the sequence dimension.
+                if isinstance(v, (tuple, list)):
+                    v = v[-2] if len(v) >= 2 else (v[0] if v else None)
+                # Old callers test `is not None` to mean "bounded cache"; the new
+                # API reports an unbounded dynamic cache as -1, which would send
+                # them down the bounded path. Normalize it back to None.
+                return None if v is None or v < 0 else v
+            cls.get_max_length = get_max_length
+        if not hasattr(cls, "seen_tokens"):
+            cls.seen_tokens = property(lambda self: self.get_seq_length())
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", required=True, help="source model id to quantize")
@@ -61,6 +155,8 @@ def main() -> None:
     import torch
     from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 
+    _install_legacy_cache_shims()
+
     long_thinker = is_long_thinker(args.model)
     tok = AutoTokenizer.from_pretrained(args.model, trust_remote_code=True)
 
@@ -75,22 +171,71 @@ def main() -> None:
     is_multimodal = hasattr(_cfg, "vision_config")
     print(f"multimodal: {is_multimodal}", flush=True)
 
-    print(f"=== baseline bf16 GSM8K(n={args.n}) ===", flush=True)
-    if is_multimodal:
-        # ConditionalGeneration models don't map to AutoModelForCausalLM; load the
-        # full multimodal model (it generates text fine from text-only input).
-        from transformers import AutoModelForImageTextToText
-        model = AutoModelForImageTextToText.from_pretrained(
-            args.model, dtype=torch.bfloat16, trust_remote_code=True).to("cuda").eval()
-    else:
-        model = AutoModelForCausalLM.from_pretrained(
-            args.model, dtype=torch.bfloat16, trust_remote_code=True).to("cuda").eval()
-    baseline = run_hf_eager_gsm8k(model, tok, args.n, long_thinker)
-    print(f"baseline acc = {baseline['acc']}", flush=True)
+    # Stale custom modeling code vs. new transformers: modern transformers
+    # normalizes a *missing* `rope_scaling` into `{"rope_type": "default", ...}`,
+    # but older bundled code reads `rope_scaling["type"]` and only skips when the
+    # attribute is falsy — so the injected dict makes it KeyError (observed on
+    # upstage/solar-pro-preview-instruct). If the model didn't declare any rope
+    # scaling itself, hand the model class an explicit None so it takes its
+    # no-scaling path.
+    load_kwargs = {}
+    if getattr(_cfg, "rope_scaling", None) and "type" not in _cfg.rope_scaling:
+        import json as _json
+        from huggingface_hub import hf_hub_download
+        try:
+            declared = _json.load(open(hf_hub_download(args.model, "config.json"))).get("rope_scaling")
+        except Exception:
+            declared = None
+        if declared is None:
+            load_kwargs["rope_scaling"] = None
+            print("compat: clearing transformers-injected rope_scaling "
+                  "(model declares none; bundled code expects the legacy 'type' key)", flush=True)
 
-    del model
-    gc.collect()
-    torch.cuda.empty_cache()
+    print(f"=== baseline bf16 GSM8K(n={args.n}) ===", flush=True)
+    try:
+        if is_multimodal:
+            # ConditionalGeneration models don't map to AutoModelForCausalLM; load the
+            # full multimodal model (it generates text fine from text-only input).
+            from transformers import AutoModelForImageTextToText
+            model = AutoModelForImageTextToText.from_pretrained(
+                args.model, dtype=torch.bfloat16, trust_remote_code=True,
+                **load_kwargs).to("cuda").eval()
+        else:
+            model = AutoModelForCausalLM.from_pretrained(
+                args.model, dtype=torch.bfloat16, trust_remote_code=True,
+                **load_kwargs).to("cuda").eval()
+        baseline = run_hf_eager_gsm8k(model, tok, args.n, long_thinker)
+        del model
+        gc.collect()
+        torch.cuda.empty_cache()
+    except Exception as e:
+        # A model that ships its own modeling code is frozen at the transformers
+        # API of its release; some are too old to run under the installed version
+        # at all (upstage/solar-pro-preview-instruct: transformers now calls
+        # `prepare_inputs_for_generation` with new kwargs its bundled code doesn't
+        # accept). vLLM has its own implementation of these architectures and
+        # doesn't execute the bundled code, so it can still produce an honest bf16
+        # reference — which is all the gate needs. Falls back to that rather than
+        # dropping the model.
+        print(f"HF-eager baseline failed ({type(e).__name__}: {str(e)[:120]}); "
+              f"falling back to a vLLM bf16 baseline", flush=True)
+        # Free the half-loaded model before handing the GPU to vLLM. `del` alone
+        # isn't enough: the live exception keeps its traceback — and every frame's
+        # locals, including `model` — alive, so the weights would still be resident
+        # and vLLM would fail to find memory for its KV cache.
+        model = locals().get("model")
+        if model is not None:
+            model.to("cpu")
+            del model
+        e.__traceback__ = None
+        gc.collect()
+        torch.cuda.empty_cache()
+        _free = torch.cuda.mem_get_info()[0] / 2**30
+        print(f"GPU free before vLLM baseline: {_free:.1f} GiB", flush=True)
+        baseline = _vllm_baseline(args.model, args.n)
+        if baseline is None:
+            raise
+    print(f"baseline acc = {baseline['acc']}", flush=True)
 
     print(f"=== llm-compressor {args.method.upper()} quantize ===", flush=True)
     from llmcompressor import oneshot
@@ -152,7 +297,14 @@ def main() -> None:
             # keeps the ConditionalGeneration wrapper + vision weights.
             from transformers import AutoModelForImageTextToText
             kwargs["model"] = AutoModelForImageTextToText.from_pretrained(
-                args.model, dtype=torch.bfloat16, trust_remote_code=True, low_cpu_mem_usage=True)
+                args.model, dtype=torch.bfloat16, trust_remote_code=True,
+                low_cpu_mem_usage=True, **load_kwargs)
+        elif load_kwargs:
+            # oneshot() can't forward from_pretrained kwargs when given a model id,
+            # so pre-load with the compat kwargs applied.
+            kwargs["model"] = AutoModelForCausalLM.from_pretrained(
+                args.model, dtype=torch.bfloat16, trust_remote_code=True,
+                low_cpu_mem_usage=True, **load_kwargs)
         oneshot(**kwargs)
         return s
 
@@ -168,12 +320,31 @@ def main() -> None:
         scheme = _run(args.method)
     except Exception as e:
         emsg = str(e)
-        if args.method == "awq" and ("smoothlayer" in emsg or "AWQMapping" in emsg
-                                     or "single smooth" in emsg or "match_modules" in emsg):
+        # Two shapes of AWQ mapping failure: it raises about the mapping itself,
+        # or — when *every* mapping is skipped as shape-incompatible (Solar's
+        # depth-up-scaled layers under the generic mappings: "64 mappings were
+        # skipped") — it resolves nothing and then divides by zero averaging
+        # error metrics over an empty list. Both mean "AWQ can't map this arch".
+        mapping_failure = ("smoothlayer" in emsg or "AWQMapping" in emsg
+                           or "single smooth" in emsg or "match_modules" in emsg
+                           or isinstance(e, ZeroDivisionError))
+        if args.method == "awq" and mapping_failure:
             print(f"AWQ mapping failed on this architecture ({type(e).__name__}); "
                   f"falling back to W8A8 RTN (mapping-free, A100-optimal)", flush=True)
+            # The failed AWQ pass left the whole model on the GPU, and the live
+            # exception's traceback keeps every frame's locals alive — so a plain
+            # gc.collect() frees nothing and the W8A8 retry OOMs. Drop the
+            # traceback and any oneshot state before reloading.
+            e.__traceback__ = None
+            try:
+                from llmcompressor.core import reset_session
+                reset_session()
+            except Exception:
+                pass
             gc.collect()
             torch.cuda.empty_cache()
+            print(f"GPU free before W8A8 retry: "
+                  f"{torch.cuda.mem_get_info()[0] / 2**30:.1f} GiB", flush=True)
             method_used = "w8a8"
             scheme = _run("w8a8")
         else:
